@@ -1,2 +1,3 @@
 # openpilot-pipeline
-Attempt at reproducing Comma AI's Openpilot model training pipeline. WIP
+
+Comma AI's ADAS software [Openpilot](https://github.com/commaai/openpilot) is open-source, but the code to create training data and train the models is not. We attempt to re-create & open-source their full pipeline.
