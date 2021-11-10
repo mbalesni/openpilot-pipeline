@@ -134,19 +134,16 @@ class BottleneckBlock1_5_1(nn.Module):
 
 
 class AggregationBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, expansion, pad_stridepairs=[], kernel_3=False):
+    def __init__(self, in_channels, out_channels, expansion, k_size, pad_stridepairs=[]):
         super(AggregationBlock, self).__init__()
         self.pad_stridepairs = pad_stridepairs
         self.expansion = expansion
+        self.k_size = k_size
         self.conv1 = nn.Conv2d(in_channels, in_channels*self.expansion, kernel_size=1,
                                stride=self.pad_stridepairs[0][0], padding=self.pad_stridepairs[0][1])
 
-        if kernel_3 == True:
-            self.conv2 = nn.Conv2d(in_channels*self.expansion, in_channels*self.expansion,
-                                   kernel_size=3, stride=self.pad_stridepairs[1][0], padding=self.pad_stridepairs[1][1])
-        else:
-            self.conv2 = nn.Conv2d(in_channels*self.expansion, in_channels*self.expansion,
-                                   kernel_size=5, stride=self.pad_stridepairs[1][0], padding=self.pad_stridepairs[1][1])
+        self.conv2 = nn.Conv2d(in_channels*self.expansion, in_channels*self.expansion,
+                               kernel_size=self.k_size, stride=self.pad_stridepairs[1][0], padding=self.pad_stridepairs[1][1])
 
         self.conv3 = nn.Conv2d(in_channels*self.expansion, out_channels, kernel_size=1,
                                stride=self.pad_stridepairs[2][0], padding=self.pad_stridepairs[2][1])
@@ -188,36 +185,36 @@ class ConvFeatureExtractor(nn.Module):
 
         self.layer1 = IntialAggregationBlock(self.num_in_channels)
         self.layer2 = InitialResBlock(self.filter_list[0], self.filter_list[0])
-        self.layer3 = AggregationBlock(self.filter_list[0], self.filter_list[1], self.expansion, [
-                                       (1, 0), (2, 1), (1, 0)], True)
+        self.layer3 = AggregationBlock(self.filter_list[0], self.filter_list[1], self.expansion, 3, [
+                                       (1, 0), (2, 1), (1, 0)])
         self.layer4 = BottleneckBlock1_3_1(
             self.filter_list[1], self.filter_list[1], 1)
         self.layer5 = BottleneckBlock1_3_1(
             self.filter_list[1], self.filter_list[1], 1)
-        self.layer6 = AggregationBlock(self.filter_list[1], self.filter_list[2], self.expansion, [
-                                       (1, 0), (2, 2), (1, 0)], False)
+        self.layer6 = AggregationBlock(self.filter_list[1], self.filter_list[2], self.expansion, 5, [
+                                       (1, 0), (2, 2), (1, 0)])
         self.layer7 = BottleneckBlock1_5_1(
             self.filter_list[2], self.filter_list[2], 2)
         self.layer8 = BottleneckBlock1_5_1(
             self.filter_list[2], self.filter_list[2], 2)
-        self.layer9 = AggregationBlock(self.filter_list[2], self.filter_list[3], self.expansion, [
-                                       (1, 0), (2, 1), (1, 0)], True)
+        self.layer9 = AggregationBlock(self.filter_list[2], self.filter_list[3], self.expansion, 5, [
+                                       (1, 0), (2, 1), (1, 0)])
         self.layer10 = BottleneckBlock1_3_1(
             self.filter_list[3], self.filter_list[3], 1)
         self.layer11 = BottleneckBlock1_3_1(
             self.filter_list[3], self.filter_list[3], 1)
         self.layer12 = BottleneckBlock1_3_1(
             self.filter_list[3], self.filter_list[3], 1)
-        self.layer13 = AggregationBlock(self.filter_list[3], self.filter_list[4], self.expansion, [
-                                        (1, 0), (1, 2), (1, 0)], False)
+        self.layer13 = AggregationBlock(self.filter_list[3], self.filter_list[4], self.expansion, 5, [
+                                        (1, 0), (1, 2), (1, 0)])
         self.layer14 = BottleneckBlock1_5_1(
             self.filter_list[4], self.filter_list[4], 2)
         self.layer15 = BottleneckBlock1_5_1(
             self.filter_list[4], self.filter_list[4], 2)
         self.layer16 = BottleneckBlock1_5_1(
             self.filter_list[4], self.filter_list[4], 2)
-        self.layer17 = AggregationBlock(self.filter_list[4], self.filter_list[5], self.expansion, [
-                                        (1, 0), (2, 2), (1, 0)], False)
+        self.layer17 = AggregationBlock(self.filter_list[4], self.filter_list[5], self.expansion, 5, [
+                                        (1, 0), (2, 2), (1, 0)])
         self.layer18 = BottleneckBlock1_5_1(
             self.filter_list[5], self.filter_list[5], 2)
         self.layer19 = BottleneckBlock1_5_1(
@@ -226,8 +223,8 @@ class ConvFeatureExtractor(nn.Module):
             self.filter_list[5], self.filter_list[5], 2)
         self.layer21 = BottleneckBlock1_5_1(
             self.filter_list[5], self.filter_list[5], 2)
-        self.layer22 = AggregationBlock(self.filter_list[5], self.filter_list[6], self.expansion, [
-                                        (1, 0), (1, 1), (1, 0)], True)
+        self.layer22 = AggregationBlock(self.filter_list[5], self.filter_list[6], self.expansion, 3, [
+                                        (1, 0), (1, 1), (1, 0)])
         self.layer23 = BottleneckBlock1_3_1(
             self.filter_list[6], self.filter_list[6], 1)
 
