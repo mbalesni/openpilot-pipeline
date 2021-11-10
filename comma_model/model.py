@@ -11,7 +11,7 @@ import numpy as np
 from torchsummary import summary
 
 """
-To do:: code refactoring. 
+To do:: code refactoring,
 
 expansion factor of 6 for depthwise conv. in all the next residual layers
 [16,24,48,88,120,208,352] * 6 == num of filters in the respective residual layers
@@ -198,7 +198,8 @@ class ConvFeatureExtractor(nn.Module):
         self.layer8 = BottleneckBlock1_5_1(
             self.filter_list[2], self.filter_list[2], 2)
         self.layer9 = AggregationBlock(self.filter_list[2], self.filter_list[3], self.expansion, 5, [
-                                       (1, 0), (2, 1), (1, 0)])
+                                    
+                                        (1, 0), (2, 1), (1, 0)])
         self.layer10 = BottleneckBlock1_3_1(
             self.filter_list[3], self.filter_list[3], 1)
         self.layer11 = BottleneckBlock1_3_1(
@@ -338,8 +339,6 @@ class GRUModel(nn.Module):
             self.initialize_traffic_convention = torch.zeros(1, 2)
 
             return self.initialize_desire, self.initialize_traffic_convention, self.initialize_initial_state
-
-#### all the dense output head for the network #####
 
 
 class CommanBranchOuputModule(nn.Module):
@@ -484,43 +483,12 @@ class CombinedModel(nn.Module):
 
 
 #####  Random arguments to define the model #####
-"""
-filters_list = [16,24,48,88,120,208,352]
-model = AggregationBlock(filters_list[4],filters_list[5],6,[(1,0),(1,2),(1,0)])
-this is an example how to make the aggregation layers
-"""
 inputs_dim_outputheads = {"path": 256, "ll_pred": 32, "llprob": 16, "road_edges": 16,
                           "lead_car": 64, "leadprob": 16, "desire_state": 32, "meta": [64, 32], "pose": 32}
 output_dim_outputheads = {"path": 4955, "ll_pred": 132, "llprob": 8, "road_edges": 132,
                           "lead_car": 102, "leadprob": 3, "desire_state": 8, "meta": [48, 32], "pose": 12}
 filters_list = [16, 24, 48, 88, 120, 208, 352]
 expansion = 6
-
-# model = outputHeads(inputs_dim_outputheads, output_dim_outputheads)
-
-# a = torch.rand(1,1536)
-# b = torch.rand(1,1024)
-# output = model(a,b)
-# print(output.size())
-
-# d = torch.rand(1,8)   a
-# c = torch.randn(1,1024)
-# i = torch.randn(1,512)
-# t = torch.randn(1,2)
-
-# model = GRUModel()
-# out= model(d,c,t,i)
-# print(out.size())
-
-# model = ConvFeatureExtractor(filters_list,expansion)
-
-# x = torch.randn(1,12,128,256)
-# x = x.permute(0,2,3,1)
-# # model = AggregationBlock(filters_list[0],filters_list[1],expansion,[(1,0),(2,1),(1,0)],True)
-# output= model(x)
-# print(output.size())
-
-#########################################################
 
 # dummy inputs
 image = torch.randn(1, 12, 128, 256)
@@ -531,4 +499,4 @@ traf = torch.rand(1, 2)
 main_model = CombinedModel(filters_list, expansion,
                            inputs_dim_outputheads, output_dim_outputheads)
 outputs = main_model(image, desire, state, traf)
-# print(outputs[0].shape)
+print(outputs[0].shape)
