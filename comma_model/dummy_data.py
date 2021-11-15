@@ -41,9 +41,7 @@ for i in range(rand_seq_length):
     imgs.append(input_1)
     desire.append(input_2)
     traff_conv.append(input_3)
-
-    if i == 0:
-        recurrent_state.append(input_4)
+    recurrent_state.append(input_4)
 
 # np.savez_compressed('inputdata.npz', imgs, desire, traff_conv, recurrent_state)
 
