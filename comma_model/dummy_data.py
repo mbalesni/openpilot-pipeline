@@ -45,7 +45,7 @@ for i in range(rand_seq_length):
     if i == 0:
         recurrent_state.append(input_4)
 
-np.savez_compressed('inputdata.npz', imgs, desire, traff_conv, recurrent_state)
+# np.savez_compressed('inputdata.npz', imgs, desire, traff_conv, recurrent_state)
 
 # generating sequence of gt and saving them
 plan = []
@@ -73,10 +73,12 @@ for i in range(rand_seq_length):
     meta_desire.append(gt9)
     pose.append(gt10)
 
-np.savez_compressed('gtdata.npz', plan, ll, ll_prob, road_edges, leads, leads_prob,
-                    desire, meta_various, meta_desire, pose)
+# np.savez_compressed('gtdata.npz', plan, ll, ll_prob, road_edges, leads, leads_prob,
+#                     desire, meta_various, meta_desire, pose)
 
-# data = load("gtdata.npz")
+data = load("gtdata.npz")
 # for k in data.iterkeys():
-#     print(k)
+    # print(k)
+
+# print(len(data))
 # print(data['arr_0'][0].shape)

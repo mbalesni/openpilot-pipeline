@@ -11,7 +11,7 @@ import numpy as np
 from torchsummary import summary
 
 """
-To do:: code refactoring,
+To do:: code refactoring, class summary and arguments description
 
 expansion factor of 6 for depthwise conv. in all the next residual layers
 [16,24,48,88,120,208,352] * 6 == num of filters in the respective residual layers
