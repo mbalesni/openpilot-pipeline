@@ -8,5 +8,5 @@ To do:
 
 
 task day 15.11.2021
-1. generate the sequence of dummy data
+<strike> 1. generate the sequence of dummy data </strike>
 2. complete the generalised data-loader. 
