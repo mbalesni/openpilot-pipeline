@@ -7,6 +7,10 @@ To do:
 3. Loss functions and task balancing strategy.  
 4. Arrange the code into specific dirs. 
 
-task day 15.11.2021
-<strike> 1. generate the sequence of dummy data </strike>
-2. complete the generalised data-loader. 
+Markup: ### task day 15.11.2021 ###
+~~ 1. generate the sequence of dummy data ~~
+~~ 2. complete the generalised data-loader ~~
+
+Markup: ### task day 16.11.2021 ###
+Markup : * Implement the training script. 
+         * implement the naive loss balancing strategy. 

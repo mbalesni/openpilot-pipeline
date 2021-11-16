@@ -54,6 +54,8 @@ class CommaLoader(Dataset):
             imgs = torch.from_numpy(self.input['arr_0'][index]).to(self.device)
             desire = torch.from_numpy(self.input['arr_1'][index]).to(self.device)
             traffic_conv = torch.from_numpy(self.input['arr_2'][index]).to(self.device)
+            
+            #need only during intialisation
             recurrent_state = torch.from_numpy(self.input['arr_3'][index]).to(self.device)
             
             plan = torch.from_numpy(self.gt['arr_0'][index]).to(self.device)
@@ -70,7 +72,7 @@ class CommaLoader(Dataset):
             return (imgs, desire, traffic_conv, recurrent_state), (plan,
             ll, ll_prob, road_edges, leads, leads_prob, desire_gt, meta_various,
             meta_desire, pose)
-        
+            
         else:
             # add transformations 
             pass 
@@ -95,10 +97,10 @@ class Transformations():
 if __name__ == "__main__":
 
     numpy_paths = ["inputdata.npz","gtdata.npz"]
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     comma_data = CommaLoader(numpy_paths, dummy_test= True)
-    comma_loader = DataLoader(comma_data, batch_size=1, shuffle=True)
+    comma_loader = DataLoader(comma_data, batch_size=2, shuffle=True)
 
     for i, data in enumerate(comma_loader):
-        print(data.shape)
+        print(data[1][0].shape)
