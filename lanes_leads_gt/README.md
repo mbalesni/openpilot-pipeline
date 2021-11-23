@@ -2,15 +2,15 @@ Return the ground-truth for a road segment.
 
 ## USAGE
 
-*Script:* start.sh
+**Script:** start.sh
 
-*Input:* fcamera.hvec
+**Input:** fcamera.hvec
 
-*Output:* marker_and_leads_ground_truth.npz
+**Output:** marker_and_leads_ground_truth.npz
 
-*Output format:* [ {'lanelines': ..., 'leads': ... } ]
+**Output format:** [ {'lanelines': ..., 'leads': ... } ]
 
-*Example:* ./start.sh fcamera.hvec
+**Example:** ./start.sh fcamera.hvec
 
 ## INSTALL 
 
