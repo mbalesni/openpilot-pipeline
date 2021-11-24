@@ -11,6 +11,7 @@ from tqdm import tqdm
 import matplotlib
 import matplotlib.pyplot as plt
 import onnxruntime as ort
+from os.path import exists
 
 import cv2 
 from tensorflow.keras.models import load_model
@@ -52,6 +53,10 @@ def generate_ground_truth( camerafile ):
   splits = camerafile.split('/')
   path_to_video_file = '/'.join(splits[:-1])
 
+  # if exists(path_to_video_file + '/marker_and_leads_ground_truth.npz'):
+  #   print( "File already exist!" )
+  #   return
+
   supercombo = ort.InferenceSession('supercombo.onnx')
 
   cap = cv2.VideoCapture(camerafile)
@@ -60,8 +65,11 @@ def generate_ground_truth( camerafile ):
 
   for i in tqdm(range(1000)):
     ret, frame = cap.read()
-    img_yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
-    imgs.append(img_yuv.reshape((874*3//2, 1164)))
+    try:
+      img_yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
+      imgs.append(img_yuv.reshape((874*3//2, 1164)))
+    except:
+      print( "EXCEPTION" )
   
 
   imgs_med_model = np.zeros((len(imgs), 384, 512), dtype=np.uint8)
@@ -79,13 +87,18 @@ def generate_ground_truth( camerafile ):
   tc = np.array([[0,1]]).astype( np.float32 )
 
   plans = []
+  plans_prob = []
   lanelines = []
   laneline_probs = []
   road_edges = []
-  leads = []
+  leads_pred = []
+  leads_prob = []
   lead_probs = []
   desire_out = []
-  metas = [] 
+  meta_engage_prob = [] 
+  meta_various_prob = [] 
+  meta_blinkers_prob = [] 
+  meta_desires = [] 
   poses = []
 
   for i in tqdm(range(len(frame_tensors) - 1)):
@@ -95,14 +108,26 @@ def generate_ground_truth( camerafile ):
 
     outs = outs[0][0]
     
-    plans.append( np.reshape( outs[:PATH], ( 5, 991 ) ) )
-    lanelines.append( np.reshape( outs[PATH:LANE_LINES], (4,132) ) )
+    p = outs[:PATH]
+    plans.append( np.reshape( p[:PATH-5], ( 5, 2, 33, 15 ) ) )
+    plans_prob.append( np.reshape( p[PATH-5:PATH], ( 5, 1 ) ) )
+    lanelines.append( np.reshape( outs[PATH:LANE_LINES], (4, 2, 33, 2) ) )
     laneline_probs.append( np.reshape( outs[LANE_LINES:LANE_LINE_PROB], (4,2) ) )
-    road_edges.append( np.reshape( outs[LANE_LINE_PROB:ROAD_EDGES], (2,132) ) )
-    leads.append( np.reshape( outs[ROAD_EDGES:LEADS], (2,51) ) )
+    road_edges.append( np.reshape( outs[LANE_LINE_PROB:ROAD_EDGES], (2,2,33,2) ) )
+
+    l = outs[ROAD_EDGES:LEADS]
+    leads_pred.append( np.reshape( l[:len(l)-6], (2,2,6,4) ) )
+    leads_prob.append( np.reshape( l[len(l)-6:len(l)], (2,3) ) )
+
     lead_probs.append( np.reshape( outs[LEADS:LEAD_PROB], (1,3) ) )
     desire_out.append( outs[LEAD_PROB:DESIRE_STATE] )
-    metas.append( outs[DESIRE_STATE:META] )
+
+    m = outs[DESIRE_STATE:META] 
+    meta_engage_prob.append( m[0] )
+    meta_various_prob.append( np.reshape( m[1:35+1], (5,7) ) )
+    meta_blinkers_prob.append( np.reshape( m[35+1:35+1+12], (6,2) ) )
+    meta_desires.append( np.reshape( m[35+1+12:35+1+12+32], (4,8) ) )
+
     poses.append( np.reshape( outs[META:POSE], (2,6) ) )
 
     recurrent_state = outs[POSE:RECURRENT_STATE] 
@@ -110,26 +135,21 @@ def generate_ground_truth( camerafile ):
     # Important to refeed the state
     state = [recurrent_state]
 
-  plans = np.stack( plans )
-  lanelines = np.stack( lanelines )
-  laneline_probs = np.stack( laneline_probs )
-  road_edges = np.stack( road_edges )
-  leads = np.stack( leads )
-  lead_probs = np.stack( lead_probs )
-  desire_out = np.stack( desire_out )
-  metas = np.stack( metas )
-  poses = np.stack( poses )
-
   np.savez_compressed(path_to_video_file + '/marker_and_leads_ground_truth.npz',
-    plan=plans,
-    lanelines=lanelines,
-    laneline_probs=laneline_probs,
-    road_edges=road_edges,
-    leads=leads,
-    lead_probs=lead_probs,
-    desire=desire_out,
-    meta=metas,
-    pose=poses )
+    plans=np.stack( plans ),
+    plans_prob=np.stack( plans_prob ),
+    lanelines=np.stack( lanelines ),
+    laneline_probs=np.stack( laneline_probs ),
+    road_edges=np.stack( road_edges ),
+    leads_pred=np.stack( leads_pred ),
+    leads_prob=np.stack( leads_prob ),
+    lead_probs=np.stack( lead_probs ),
+    desire=np.stack( desire_out ),
+    meta_engage_prob=np.stack( meta_engage_prob ),
+    meta_various_prob=np.stack( meta_various_prob ),
+    meta_blinkers_prob=np.stack( meta_blinkers_prob ),
+    meta_desires=np.stack( meta_desires ),
+    pose=np.stack( poses ) )
 
 
 if __name__ == '__main__':
