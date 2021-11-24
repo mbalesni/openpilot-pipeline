@@ -1,4 +1,4 @@
 git clone https://github.com/littlemountainman/modeld.git
 cd modeld
-curl -o models/supercombo.onnx https://github.com/commaai/openpilot/raw/master/models/supercombo.onnx
+curl https://media.githubusercontent.com/media/commaai/openpilot/master/models/supercombo.onnx --output supercombo.onnx
 
