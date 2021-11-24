@@ -1,6 +1,6 @@
 Return the ground-truth for a road segment.
 
-## USAGE
+## USAGE 1
 
 **Script:** start.sh
 
@@ -8,9 +8,17 @@ Return the ground-truth for a road segment.
 
 **Output:** marker_and_leads_ground_truth.npz
 
-**Output format:** [ {'lanelines': ..., 'leads': ... } ]
+**Output format:** [ plan: [...], lanelines: [...], leads: [...], ..., pose: [...] ]
 
 **Example:** ./start.sh fcamera.hvec
+
+## USAGE 2
+
+**Script:** generate_gt.py
+
+**Description:** generate ground truth in-place for all the folders in '/data/realdata/aba20ae4' which contains 'fcamera.hevc'.
+
+**Example:** python generate_gt.py
 
 ## INSTALL 
 
