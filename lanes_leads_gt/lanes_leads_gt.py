@@ -3,18 +3,11 @@
 import sys
 sys.path.append("../")
 
-
-from utils import transform_img, eon_intrinsics
-from common.transformations.model import medmodel_intrinsics
+from utils import get_train_imgs
 import numpy as np
 from tqdm import tqdm
-import matplotlib
-import matplotlib.pyplot as plt
 import onnxruntime as ort
 from os.path import exists
-
-import cv2 
-from tensorflow.keras.models import load_model
 
 MAX_DISTANCE = 140.
 LANE_OFFSET = 1.8
@@ -49,40 +42,18 @@ def frames_to_tensor(frames):
   in_img1[:, 5] = frames[:, H+H//4:H+H//2].reshape((-1, H//2,W//2))
   return in_img1
 
-def generate_ground_truth( camerafile ):
+def generate_ground_truth( camerafile, supercombo ):
   splits = camerafile.split('/')
   path_to_video_file = '/'.join(splits[:-1])
+
+  images = get_train_imgs( path_to_segment=path_to_video_file )
 
   # if exists(path_to_video_file + '/marker_and_leads_ground_truth.npz'):
   #   print( "File already exist!" )
   #   return
 
-  supercombo = ort.InferenceSession('supercombo.onnx')
-
-  cap = cv2.VideoCapture(camerafile)
-
-  imgs = []
-
-  for i in tqdm(range(1000)):
-    ret, frame = cap.read()
-    try:
-      img_yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
-      imgs.append(img_yuv.reshape((874*3//2, 1164)))
-    except:
-      print( "EXCEPTION" )
-  
-
-  imgs_med_model = np.zeros((len(imgs), 384, 512), dtype=np.uint8)
-  for i, img in tqdm(enumerate(imgs)):
-    imgs_med_model[i] = transform_img(img, from_intr=eon_intrinsics, to_intr=medmodel_intrinsics, yuv=True,
-                                      output_size=(512,256))
-  frame_tensors = frames_to_tensor(np.array(imgs_med_model)).astype(np.float32)/128.0 - 1.0
-
-
   state = np.zeros((1,512)).astype( np.float32 )
   desire = np.zeros((1,8)).astype( np.float32 )
-
-  cap = cv2.VideoCapture(camerafile)
 
   tc = np.array([[0,1]]).astype( np.float32 )
 
@@ -101,9 +72,9 @@ def generate_ground_truth( camerafile ):
   meta_desires = [] 
   poses = []
 
-  for i in tqdm(range(len(frame_tensors) - 1)):
+  for i in tqdm(range(len(images) - 1)):
     
-    img = np.vstack(frame_tensors[i:i+2])[None]
+    img = np.vstack(images[i:i+2])[None]
     outs = supercombo.run( None, { 'input_imgs': img, 'desire': desire, 'traffic_convention': tc, 'initial_state': state } )
 
     outs = outs[0][0]
@@ -123,10 +94,14 @@ def generate_ground_truth( camerafile ):
     desire_out.append( outs[LEAD_PROB:DESIRE_STATE] )
 
     m = outs[DESIRE_STATE:META] 
-    meta_engage_prob.append( m[0] )
-    meta_various_prob.append( np.reshape( m[1:35+1], (5,7) ) )
-    meta_blinkers_prob.append( np.reshape( m[35+1:35+1+12], (6,2) ) )
-    meta_desires.append( np.reshape( m[35+1+12:35+1+12+32], (4,8) ) )
+
+    meta_offsets = [0, (1,36), (36, 48), (48,80) ]
+
+    meta_engage_prob.append( m[meta_offsets[0]] )
+    
+    meta_various_prob.append( np.reshape( m[meta_offsets[1][0]:meta_offsets[1][1]], (5,7) ) )
+    meta_blinkers_prob.append( np.reshape( m[meta_offsets[2][0]:meta_offsets[2][1]], (6,2) ) )
+    meta_desires.append( np.reshape( m[meta_offsets[3][0]:meta_offsets[3][1]], (4,8) ) )
 
     poses.append( np.reshape( outs[META:POSE], (2,6) ) )
 
@@ -155,4 +130,6 @@ def generate_ground_truth( camerafile ):
 if __name__ == '__main__':
   camerafile = sys.argv[1]
 
-  generate_ground_truth( camerafile )
+  supercombo = ort.InferenceSession('supercombo.onnx')
+
+  generate_ground_truth( camerafile, supercombo )
