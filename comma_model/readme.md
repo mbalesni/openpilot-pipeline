@@ -8,10 +8,10 @@ To do:
 4. Arrange the code into specific dirs. 
 
 Goals week: 
-1. complete the  generalised training pipeline.
-2. Complete the dataloader to incorporate initial image transformations.
-3. Initial train on the generated gt.
+- complete the  generalised training pipeline.
+- Complete the dataloader to incorporate initial image transformations.
+- Initial train on the generated gt.
 
 Random things that were discussed in the meeting:
-1. We dont have enough data for the training the model from scratch, so we are want to convert the existing onnx model--->torch and train some of the last the layers and fix the rest. 
-2. The training pipeline will stay the same as planned. 
+- We dont have enough data for the training the model from scratch, so we are want to convert the existing onnx model--->torch and train some of the last the layers and fix the rest. 
+- The training pipeline will stay the same as planned. 

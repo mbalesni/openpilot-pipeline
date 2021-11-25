@@ -1,11 +1,13 @@
-import torch 
 import argparse
+import itertools
+import os 
+import cv2
+import numpy as np 
+import torch 
 import torch.nn as nn
 from torchvision.transforms import functional as F
+import torch.optim as topt
 from Dataloader import *
-import os 
-import cv2 
-import numpy as np 
 from model import *
 
 cuda = torch.cuda.is_available()
@@ -37,11 +39,17 @@ args = parser.parse_args()
 #Hyperparams
 name = "Dummy_comma_pipeline_nov26"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
+lr = (1e-4, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
+diff_lr = True
+l2_lambda = (1e-4,1e-4,1e-4) 
+lrs_factor = 0.75
+lrs_patience = 50
+lrs_cd = 50
+lrs_thresh = 1e-4
+lrs_min = 1e-6
 
 epochs = 20 
-learning_rate = 0.001
 batch_size = 2 
-
 split_per = 0.8
 
 ### Load data and split in test and train
@@ -50,7 +58,7 @@ split_per = 0.8
 dataset split for test and train will create a new utils.py for that later
 """
 
-# def split_data():
+def split_data():
 
 
 
@@ -84,11 +92,31 @@ def load_model(params_scratch):
     return model 
 
 comma_model = load_model(param_scratch_model)
+comma_model = comma_model.to(device)
 
-## Define Loss and optimizer
-kl_div = 
 
-## train loop 
+
+### Define Loss and optimizer
+#diff. learning rate for different parts of the network.
+if not diff_lr:
+    param_group = comma_model.parameters()
+else:
+    conv, gru, outhead = comma_model.getGroupParams()    
+    gru = list(itertools.chain.from_iterable(gru))
+    conv = list(itertools.chain.from_iterable(conv))
+    outhead = list(itertools.chain.from_iterable(outhead))
+    param_group = [ { "params": conv },
+                    { "params": gru, "lr": lr[1], "weight_decay": l2_lambda[1] },
+                    { "params": outhead, "lr": lr[2], "weight_decay": l2_lambda[2]}]
+    
+optimizer = topt.Adam(param_group,lr[0], weight_decay=l2_lambda[0])
+#choice of lr_scheduler can be changed
+scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
+                                                 threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
+                                                 cooldown=lrs_cd)
+# loss_func = 
+
+# ## train loop 
 
 
 

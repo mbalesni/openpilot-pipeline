@@ -471,6 +471,19 @@ class CombinedModel(nn.Module):
         self.GRU_model = GRUModel()
         self.output_model = OutputHeads(
             self.indim_outhead, self.outdim_outhead)
+    """
+    obtaining model group parameters as --> (conv_extractor, GRU, Output_heads)
+    """
+    def getGroupParams(self):
+        out_conv = []
+        out_gru = []
+        out_outheads = []
+
+        out_conv.append(self.Conv_extractor.parameters())
+        out_gru.append(self.GRU_model.parameters())
+        out_outheads.append(self.output_model.parameters())
+
+        return out_conv, out_gru, out_outheads
 
     def forward(self, input_image, input_desire, intial_state, traffic_convention):
 
@@ -480,6 +493,8 @@ class CombinedModel(nn.Module):
         input_outputmodel = torch.cat((GRU_output, preGRU_in), 1)
         Final_output = self.output_model(input_outputmodel, conv_features)
         return Final_output
+
+
 
 
 #####  Random arguments to define the model #####
