@@ -3,17 +3,11 @@
 import sys
 sys.path.append("../")
 
-
-from utils import transform_img, eon_intrinsics
-from common.transformations.model import medmodel_intrinsics
+from utils import get_train_imgs
 import numpy as np
 from tqdm import tqdm
-import matplotlib
-import matplotlib.pyplot as plt
 import onnxruntime as ort
-
-import cv2 
-from tensorflow.keras.models import load_model
+from os.path import exists
 
 MAX_DISTANCE = 140.
 LANE_OFFSET = 1.8
@@ -48,61 +42,67 @@ def frames_to_tensor(frames):
   in_img1[:, 5] = frames[:, H+H//4:H+H//2].reshape((-1, H//2,W//2))
   return in_img1
 
-def generate_ground_truth( camerafile ):
+def generate_ground_truth( camerafile, supercombo ):
   splits = camerafile.split('/')
   path_to_video_file = '/'.join(splits[:-1])
 
-  supercombo = ort.InferenceSession('supercombo.onnx')
+  images = get_train_imgs( path_to_segment=path_to_video_file )
 
-  cap = cv2.VideoCapture(camerafile)
-
-  imgs = []
-
-  for i in tqdm(range(1000)):
-    ret, frame = cap.read()
-    img_yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
-    imgs.append(img_yuv.reshape((874*3//2, 1164)))
-  
-
-  imgs_med_model = np.zeros((len(imgs), 384, 512), dtype=np.uint8)
-  for i, img in tqdm(enumerate(imgs)):
-    imgs_med_model[i] = transform_img(img, from_intr=eon_intrinsics, to_intr=medmodel_intrinsics, yuv=True,
-                                      output_size=(512,256))
-  frame_tensors = frames_to_tensor(np.array(imgs_med_model)).astype(np.float32)/128.0 - 1.0
-
+  # if exists(path_to_video_file + '/marker_and_leads_ground_truth.npz'):
+  #   print( "File already exist!" )
+  #   return
 
   state = np.zeros((1,512)).astype( np.float32 )
   desire = np.zeros((1,8)).astype( np.float32 )
 
-  cap = cv2.VideoCapture(camerafile)
-
   tc = np.array([[0,1]]).astype( np.float32 )
 
   plans = []
+  plans_prob = []
   lanelines = []
   laneline_probs = []
   road_edges = []
-  leads = []
+  leads_pred = []
+  leads_prob = []
   lead_probs = []
   desire_out = []
-  metas = [] 
+  meta_engage_prob = [] 
+  meta_various_prob = [] 
+  meta_blinkers_prob = [] 
+  meta_desires = [] 
   poses = []
 
-  for i in tqdm(range(len(frame_tensors) - 1)):
+  for i in tqdm(range(len(images) - 1)):
     
-    img = np.vstack(frame_tensors[i:i+2])[None]
+    img = np.vstack(images[i:i+2])[None]
     outs = supercombo.run( None, { 'input_imgs': img, 'desire': desire, 'traffic_convention': tc, 'initial_state': state } )
 
     outs = outs[0][0]
     
-    plans.append( np.reshape( outs[:PATH], ( 5, 991 ) ) )
-    lanelines.append( np.reshape( outs[PATH:LANE_LINES], (4,132) ) )
+    p = outs[:PATH]
+    plans.append( np.reshape( p[:PATH-5], ( 5, 2, 33, 15 ) ) )
+    plans_prob.append( np.reshape( p[PATH-5:PATH], ( 5, 1 ) ) )
+    lanelines.append( np.reshape( outs[PATH:LANE_LINES], (4, 2, 33, 2) ) )
     laneline_probs.append( np.reshape( outs[LANE_LINES:LANE_LINE_PROB], (4,2) ) )
-    road_edges.append( np.reshape( outs[LANE_LINE_PROB:ROAD_EDGES], (2,132) ) )
-    leads.append( np.reshape( outs[ROAD_EDGES:LEADS], (2,51) ) )
+    road_edges.append( np.reshape( outs[LANE_LINE_PROB:ROAD_EDGES], (2,2,33,2) ) )
+
+    l = outs[ROAD_EDGES:LEADS]
+    leads_pred.append( np.reshape( l[:len(l)-6], (2,2,6,4) ) )
+    leads_prob.append( np.reshape( l[len(l)-6:len(l)], (2,3) ) )
+
     lead_probs.append( np.reshape( outs[LEADS:LEAD_PROB], (1,3) ) )
     desire_out.append( outs[LEAD_PROB:DESIRE_STATE] )
-    metas.append( outs[DESIRE_STATE:META] )
+
+    m = outs[DESIRE_STATE:META] 
+
+    meta_offsets = [0, (1,36), (36, 48), (48,80) ]
+
+    meta_engage_prob.append( m[meta_offsets[0]] )
+    
+    meta_various_prob.append( np.reshape( m[meta_offsets[1][0]:meta_offsets[1][1]], (5,7) ) )
+    meta_blinkers_prob.append( np.reshape( m[meta_offsets[2][0]:meta_offsets[2][1]], (6,2) ) )
+    meta_desires.append( np.reshape( m[meta_offsets[3][0]:meta_offsets[3][1]], (4,8) ) )
+
     poses.append( np.reshape( outs[META:POSE], (2,6) ) )
 
     recurrent_state = outs[POSE:RECURRENT_STATE] 
@@ -110,29 +110,26 @@ def generate_ground_truth( camerafile ):
     # Important to refeed the state
     state = [recurrent_state]
 
-  plans = np.stack( plans )
-  lanelines = np.stack( lanelines )
-  laneline_probs = np.stack( laneline_probs )
-  road_edges = np.stack( road_edges )
-  leads = np.stack( leads )
-  lead_probs = np.stack( lead_probs )
-  desire_out = np.stack( desire_out )
-  metas = np.stack( metas )
-  poses = np.stack( poses )
-
   np.savez_compressed(path_to_video_file + '/marker_and_leads_ground_truth.npz',
-    plan=plans,
-    lanelines=lanelines,
-    laneline_probs=laneline_probs,
-    road_edges=road_edges,
-    leads=leads,
-    lead_probs=lead_probs,
-    desire=desire_out,
-    meta=metas,
-    pose=poses )
+    plans=np.stack( plans ),
+    plans_prob=np.stack( plans_prob ),
+    lanelines=np.stack( lanelines ),
+    laneline_probs=np.stack( laneline_probs ),
+    road_edges=np.stack( road_edges ),
+    leads_pred=np.stack( leads_pred ),
+    leads_prob=np.stack( leads_prob ),
+    lead_probs=np.stack( lead_probs ),
+    desire=np.stack( desire_out ),
+    meta_engage_prob=np.stack( meta_engage_prob ),
+    meta_various_prob=np.stack( meta_various_prob ),
+    meta_blinkers_prob=np.stack( meta_blinkers_prob ),
+    meta_desires=np.stack( meta_desires ),
+    pose=np.stack( poses ) )
 
 
 if __name__ == '__main__':
   camerafile = sys.argv[1]
 
-  generate_ground_truth( camerafile )
+  supercombo = ort.InferenceSession('supercombo.onnx')
+
+  generate_ground_truth( camerafile, supercombo )
