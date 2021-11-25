@@ -24,7 +24,6 @@ class CommaLoader(Dataset):
         Args: ------------------
 
         """
-
         self.dummy_test = dummy_test
         self.npz_paths = npz_paths 
         self.transform = transform
@@ -36,9 +35,7 @@ class CommaLoader(Dataset):
         if dummy_test:
             self.input = np.load(self.npz_paths[0])
             self.gt = np.load(self.npz_paths[1])  
-        
 
-        
     def __len__(self):
 
         if self.dummy_test:
@@ -76,8 +73,6 @@ class CommaLoader(Dataset):
         else:
             # add transformations 
             pass 
-        
-        
 
 class Transformations():
     
@@ -94,13 +89,13 @@ class Transformations():
         pass 
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    numpy_paths = ["inputdata.npz","gtdata.npz"]
-    devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     numpy_paths = ["inputdata.npz","gtdata.npz"]
+#     devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    comma_data = CommaLoader(numpy_paths, dummy_test= True)
-    comma_loader = DataLoader(comma_data, batch_size=2, shuffle=True)
+#     comma_data = CommaLoader(numpy_paths, dummy_test= True)
+#     comma_loader = DataLoader(comma_data, batch_size=2, shuffle=True)
 
-    for i, data in enumerate(comma_loader):
-        print(data[1][0].shape)
+#     for i, data in enumerate(comma_loader):
+#         print(data[1][0].shape)

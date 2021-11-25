@@ -2,8 +2,10 @@ import numpy as np
 from numpy import savez_compressed
 from numpy import load
 
+"""
+To do: --- need to add the samples dimension.
+"""
 rand_seq_length = 10
-
 # input
 def generate_input_arrays():
     images = np.random.rand(1, 12, 128, 256)
