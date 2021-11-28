@@ -54,18 +54,13 @@ split_per = 0.8
 
 ### Load data and split in test and train
 
-"""
-dataset split for test and train will create a new utils.py for that later
-"""
-
-def split_data():
-
-
-
 if "Dummy" or "dummy" in name:
-    dummy_data  = CommaLoader(path_npz_dummy, dummy_test= True)
-    dummy_data_loader = DataLoader(dummy_data, batch_size=2, shuffle=True)
-
+    comma_data_train = CommaLoader(path_npz_dummy,0.8, dummy_test= True, train= True)
+    loader_train = DataLoader(comma_data_train, batch_size=2, shuffle=True)
+    
+    comma_data_test = CommaLoader(path_npz_dummy,0.8, dummy_test= True, test=True)
+    loader_test = DataLoader(comma_data_test, batch_size=2, shuffle=True)
+    
 ##Load model 
 """
 Both the model from scratch and the onnx-pytorch model can be used 
@@ -93,8 +88,6 @@ def load_model(params_scratch):
 
 comma_model = load_model(param_scratch_model)
 comma_model = comma_model.to(device)
-
-
 
 ### Define Loss and optimizer
 #diff. learning rate for different parts of the network.

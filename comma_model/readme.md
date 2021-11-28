@@ -15,3 +15,4 @@ Goals week:
 Random things that were discussed in the meeting:
 - We dont have enough data for the training the model from scratch, so we are want to convert the existing onnx model--->torch and train some of the last the layers and fix the rest. 
 - The training pipeline will stay the same as planned. 
+s
