@@ -10,7 +10,7 @@ frame_length = 20
 # input
 def generate_input_arrays(frame_length):
 
-    images = np.random.rand(frame_length,1, 12, 128, 256)
+    images = np.random.rand(frame_length, 12, 128, 256)
     desire = np.random.rand(frame_length,1, 8)
     traffic_convention = np.random.rand(frame_length,1, 2)  # assumed  LHD
     recurrent_state = np.random.rand(frame_length, 1, 512)  # needed on intialization
@@ -87,15 +87,14 @@ pose.append(gt10)
 #                     meta_desire = meta_desire, 
 #                     pose = pose)
 
-# data = load("inputdata.npz")
+data = load("inputdata.npz")
 
 # # for k in data.iterkeys():
 # #     print(k)
 
 # # correct way to find the length of this dummy data
-# # a = data['imgs'][0].shape
+# a = data['imgs'][0].shape
 # # print(a[0]) 
-# # print(data['ll'].shape)
 
 # # a = data["imgs"][0][:16]
 # splt = 16

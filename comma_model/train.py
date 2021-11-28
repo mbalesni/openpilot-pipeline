@@ -57,10 +57,10 @@ split_per = 0.8
 
 if "Dummy" or "dummy" in name:
     comma_data_train = CommaLoader(path_npz_dummy,split_per, dummy_test= True, train= True)
-    train_loader = DataLoader(comma_data_train, batch_size=2, shuffle=True)
+    train_loader = DataLoader(comma_data_train, batch_size=1, shuffle=True)
     
     comma_data_test = CommaLoader(path_npz_dummy,split_per, dummy_test= True, test=True)
-    test_loader = DataLoader(comma_data_test, batch_size=2, shuffle=True)
+    test_loader = DataLoader(comma_data_test, batch_size=1, shuffle=True)
     
 ##Load model 
 """
@@ -108,7 +108,7 @@ optimizer = topt.Adam(param_group,lr[0], weight_decay=l2_lambda[0])
 scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)
-loss_func = nn.KLDivLoss()
+criterion1 = nn.KLDivLoss()
 
 # ## train loop 
 for epoch in tqdm(range(epochs)):
@@ -132,7 +132,9 @@ for epoch in tqdm(range(epochs)):
         meta_desire_gt = labels[8].to(device)
         pose_gt = labels[9].to(device)
 
-        optimizer
-
-
-
+        desire = torch.squeeze(desire,dim =1)
+        traffic_convention = torch.squeeze(traffic_convention, dim = 1)
+        
+        # print(desire.shape)
+        outputs = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
+        print(outputs[9].shape)

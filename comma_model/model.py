@@ -291,6 +291,9 @@ class GRUCell(nn.Module):
         gate_x = self.x2h(x)
         gate_h = self.h2h(init_state)
 
+        gate_h = torch.squeeze(gate_h, dim=1)
+        # print("******************")
+        print(gate_h.shape)
         i_r, i_i, i_n = gate_x.chunk(3, 1)
         h_r, h_i, h_n = gate_h.chunk(3, 1)
 
@@ -313,15 +316,15 @@ class GRUModel(nn.Module):
 
     def forward(self, desire, conv_features, traffic_convention, init_state):
 
-        assert desire.size() == (1, 8), "desire tensor shape is wrong"
-        assert conv_features.size() == (1, 1024), "conv feature tensor shape is wrong"
-        assert traffic_convention.size() == (
-            1, 2), "traffic convention tensor shape is wrong"
-
+        # assert desire.size() == (1, 8), "desire tensor shape is wrong"
+        # assert conv_features.size() == (1, 1024), "conv feature tensor shape is wrong"
+        # assert traffic_convention.size() == (
+            # 1, 2), "traffic convention tensor shape is wrong"
+        
         x = self.elu(torch.cat((conv_features, desire, traffic_convention), 1))
         in_GRU = self.relu(self.gemmtoGRU(x))
-
         out_GRU = self.GRUlayer(in_GRU, init_state)
+        out_GRU = torch.squeeze(out_GRU, dim=1)
 
         return out_GRU, in_GRU
 
@@ -329,12 +332,11 @@ class GRUModel(nn.Module):
         # to be intialized in training script
         if torch.cuda.is_available():
             # Variable: to enable back pass for
-            self.initialize_initial_state = Variable(
-                torch.zeros(1, 512).cuda())
+            self.initialize_initial_state = torch.zeros(1, 512).cuda()
             self.initialize_desire = torch.zeros(1, 8).cuda()
             self.initialize_traffic_convention = torch.zeros(1, 2).cuda()
         else:
-            self.initialize_initial_state = Variable(torch.zeros(1, 512))
+            self.initialize_initial_state = torch.zeros(1, 512)
             self.initialize_desire = torch.zeros(1, 8)
             self.initialize_traffic_convention = torch.zeros(1, 2)
 
@@ -506,12 +508,17 @@ class CombinedModel(nn.Module):
 # expansion = 6
 
 # # dummy inputs
-# image = torch.randn(1, 12, 128, 256)
+# image = torch.randn(1,12, 128, 256)
 # desire = torch.rand(1, 8)
 # state = torch.rand(1, 512)
 # traf = torch.rand(1, 2)
 
-# main_model = CombinedModel(filters_list, expansion,
-#                            inputs_dim_outputheads, output_dim_outputheads)
-# outputs = main_model(image, desire, state, traf)
-# print(outputs[0].shape)
+# # main_model = CombinedModel(filters_list, expansion,
+# #                            inputs_dim_outputheads, output_dim_outputheads)
+# # outputs = main_model(image, desire, state, traf)
+
+# test_block = ConvFeatureExtractor(filters_list, expansion)
+# out = test_block(image) 
+
+# concatt = torch.cat((out, desire, traf),1)
+# print(concatt.shape)
