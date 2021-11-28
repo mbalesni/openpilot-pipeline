@@ -3,6 +3,7 @@ import itertools
 import os 
 import cv2
 import numpy as np 
+from tqdm import tqdm
 import torch 
 import torch.nn as nn
 from torchvision.transforms import functional as F
@@ -55,11 +56,11 @@ split_per = 0.8
 ### Load data and split in test and train
 
 if "Dummy" or "dummy" in name:
-    comma_data_train = CommaLoader(path_npz_dummy,0.8, dummy_test= True, train= True)
-    loader_train = DataLoader(comma_data_train, batch_size=2, shuffle=True)
+    comma_data_train = CommaLoader(path_npz_dummy,split_per, dummy_test= True, train= True)
+    train_loader = DataLoader(comma_data_train, batch_size=2, shuffle=True)
     
-    comma_data_test = CommaLoader(path_npz_dummy,0.8, dummy_test= True, test=True)
-    loader_test = DataLoader(comma_data_test, batch_size=2, shuffle=True)
+    comma_data_test = CommaLoader(path_npz_dummy,split_per, dummy_test= True, test=True)
+    test_loader = DataLoader(comma_data_test, batch_size=2, shuffle=True)
     
 ##Load model 
 """
@@ -107,10 +108,31 @@ optimizer = topt.Adam(param_group,lr[0], weight_decay=l2_lambda[0])
 scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)
-# loss_func = 
+loss_func = nn.KLDivLoss()
 
 # ## train loop 
+for epoch in tqdm(range(epochs)):
+    for i , data in tqdm(enumerate(train_loader)):
+        input, labels = data
+        optimizer.zero_grad()
+        #input
+        yuv_images = input[0].to(device)
+        desire = input[1].to(device)
+        traffic_convention = input[2].to(device)
+        recurrent_state = input[3].to(device)
+        #gt
+        plan_gt = labels[0].to(device)
+        lane_line_gt = labels[1].to(device)
+        lane_prob_gt = labels[2].to(device)
+        road_edges_gt = labels[3].to(device) 
+        leads_gt = labels[4].to(device)
+        lead_prob_gt = labels[5].to(device)
+        desire_gt = labels[6].to(device)
+        meta_gt = labels[7].to(device)
+        meta_desire_gt = labels[8].to(device)
+        pose_gt = labels[9].to(device)
 
+        optimizer
 
 
 

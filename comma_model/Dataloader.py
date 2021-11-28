@@ -136,6 +136,3 @@ class Transformations():
 
     # comma_data = CommaLoader(numpy_paths,0.8, dummy_test= True, train= True)
     # comma_loader = DataLoader(comma_data, batch_size=2)
-
-    # for i, data in enumerate(comma_loader):
-    #     print(i)
