@@ -109,7 +109,7 @@ scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, pa
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)
 criterion1 = nn.KLDivLoss()
-
+sftmax = nn.Softmax(dim=0)
 # ## train loop 
 for epoch in tqdm(range(epochs)):
     for i , data in tqdm(enumerate(train_loader)):
@@ -136,5 +136,39 @@ for epoch in tqdm(range(epochs)):
         traffic_convention = torch.squeeze(traffic_convention, dim = 1)
         
         # print(desire.shape)
-        outputs = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
-        print(outputs[9].shape)
+        plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred   = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
+        
+        path_dict = {}
+        path_plans =  plan_pred
+        path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+        path_dict["path_prob"] = []
+        path_dict["path1"] = path1[:,:-1].reshape(2,33,15)
+        path_dict["path2"] = path2[:,:-1].reshape(2,33,15)
+        path_dict["path3"] = path3[:,:-1].reshape(2,33,15)
+        path_dict["path4"] = path4[:,:-1].reshape(2,33,15)
+        path_dict["path5"] = path5[:,:-1].reshape(2,33,15)
+        path_dict["path_prob"].append(path1[:,-1]) 
+        path_dict["path_prob"].append(path2[:,-1])
+        path_dict["path_prob"].append(path3[:,-1])
+        path_dict["path_prob"].append(path4[:,-1])
+        path_dict["path_prob"].append(path5[:,-1])
+        
+        plan_hyp_tensor = torch.tensor((path_dict['path_prob'][0],path_dict['path_prob'][1],path_dict['path_prob'][2],path_dict['path_prob'][3],path_dict['path_prob'][4]), requires_grad= False )
+        # print(plan_hyp_tensor)
+        plan_hyp_tensor = sftmax(plan_hyp_tensor)
+        # print(plan_hyp_tensor)
+        plan_branch_index = torch.argmax(plan_hyp_tensor).item()
+
+        
+        
+    
+
+
+        ## task loss balancing strategy: used--> most naive
+        # Combined_loss= 
+
+
+        ## backprop 
+        # Combined_loss.backward()
+
+        ## 
