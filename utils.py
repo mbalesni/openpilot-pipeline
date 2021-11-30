@@ -5,7 +5,7 @@ import numpy as np
 import math
 import os
 import cv2
-from tools.lib.logreader import LogReader
+#from tools.lib.logreader import LogReader
 
 
 FULL_FRAME_SIZE = (1164, 874)
@@ -104,14 +104,16 @@ def reshape_yuv(frames):
 def load_frames(video_path):
     cap = cv2.VideoCapture(video_path)
     yuv_frames = []
-
+    index = 0
     while cap.isOpened():
-
+        index += 1
         ret, frame = cap.read()
         if not ret:
             break
 
         yuv_frames.append(bgr_to_yuv(frame))
+        if index == 20:
+            return yuv_frames
 
     return yuv_frames
 
@@ -156,11 +158,11 @@ def get_train_imgs(path_to_segment, video_file='fcamera.hevc', gt_file='ground_t
     input_video = os.path.join(path_to_segment, video_file)
     ground_truths_file = os.path.join(path_to_segment, gt_file)
 
-    if not os.path.exists(ground_truths_file):
-        raise FileNotFoundError('Segment ground truths NOT FOUND: {}'.format(path_to_segment))
+    #if not os.path.exists(ground_truths_file):
+    #    raise FileNotFoundError('Segment ground truths NOT FOUND: {}'.format(path_to_segment))
 
-    ground_truths = np.load(ground_truths_file)
-    n_inputs_necessary = ground_truths['plan'].shape[0] # TODO: should we add -1 here?
+    #ground_truths = np.load(ground_truths_file)
+    #n_inputs_necessary = ground_truths['plan'].shape[0] # TODO: should we add -1 here?
 
     yuv_frames = load_frames(input_video)
     prepared_frames = transform_frames(yuv_frames) # NOTE: should NOT be normalized
@@ -172,4 +174,4 @@ def get_train_imgs(path_to_segment, video_file='fcamera.hevc', gt_file='ground_t
     #     stacked_frames = np.vstack(prepared_frames[i:i+2])[None] # (12, 128, 256)
     #     train_imgs[i] = stacked_frames
 
-    return prepared_frames[:n_inputs_necessary]
+    return prepared_frames#[:n_inputs_necessary]

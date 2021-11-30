@@ -46,7 +46,7 @@ def generate_ground_truth( camerafile, supercombo ):
   splits = camerafile.split('/')
   path_to_video_file = '/'.join(splits[:-1])
 
-  images = get_train_imgs( path_to_segment=path_to_video_file )
+  images = get_train_imgs( path_to_segment=path_to_video_file, video_file='video.hevc' )
 
   # if exists(path_to_video_file + '/marker_and_leads_ground_truth.npz'):
   #   print( "File already exist!" )
