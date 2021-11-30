@@ -50,17 +50,17 @@ lrs_thresh = 1e-4
 lrs_min = 1e-6
 
 epochs = 20 
-batch_size = 2 
+batch_size = 2
 split_per = 0.8
 
 ### Load data and split in test and train
 
 if "Dummy" or "dummy" in name:
     comma_data_train = CommaLoader(path_npz_dummy,split_per, dummy_test= True, train= True)
-    train_loader = DataLoader(comma_data_train, batch_size=1, shuffle=True)
+    train_loader = DataLoader(comma_data_train, batch_size=batch_size, shuffle=True)
     
     comma_data_test = CommaLoader(path_npz_dummy,split_per, dummy_test= True, test=True)
-    test_loader = DataLoader(comma_data_test, batch_size=1, shuffle=True)
+    test_loader = DataLoader(comma_data_test, batch_size=batch_size, shuffle=True)
     
 ##Load model 
 """
@@ -109,8 +109,11 @@ scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, pa
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)
 criterion1 = nn.KLDivLoss()
+criterion2 = nn.CrossEntropyLoss()
 sftmax = nn.Softmax(dim=0)
+
 # ## train loop 
+recurrent_state = torch.zeros(batch_size,512)
 for epoch in tqdm(range(epochs)):
     for i , data in tqdm(enumerate(train_loader)):
         input, labels = data
@@ -118,8 +121,8 @@ for epoch in tqdm(range(epochs)):
         #input
         yuv_images = input[0].to(device)
         desire = input[1].to(device)
-        traffic_convention = input[2].to(device)
-        recurrent_state = input[3].to(device)
+        traffic_convention = input[2].to(device) 
+        
         #gt
         plan_gt = labels[0].to(device)
         lane_line_gt = labels[1].to(device)
@@ -131,38 +134,89 @@ for epoch in tqdm(range(epochs)):
         meta_gt = labels[7].to(device)
         meta_desire_gt = labels[8].to(device)
         pose_gt = labels[9].to(device)
-
         desire = torch.squeeze(desire,dim =1)
         traffic_convention = torch.squeeze(traffic_convention, dim = 1)
+        output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
+        plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
         
-        # print(desire.shape)
-        plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred   = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
-        
+        recurrent_state = output2
+        """"
+        How to approach this situation :::
+        1. create distribution objects and calcualte KL div. 
+        2. class prob=== categorical distribution
+        3. single logit === bernouolli distribution 
+        4. for mean and std values -- normal distribution0
+        5. for paths i need to take --- > argmin(losses) and add the loss in the final loss with that index
+        6. for now use the most basic version of the pipeline. 
+        7. for intial training give desire, traffic conv to zeros.
+        """
+
+        ## path plan
         path_dict = {}
         path_plans =  plan_pred
         path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+
         path_dict["path_prob"] = []
-        path_dict["path1"] = path1[:,:-1].reshape(2,33,15)
-        path_dict["path2"] = path2[:,:-1].reshape(2,33,15)
-        path_dict["path3"] = path3[:,:-1].reshape(2,33,15)
-        path_dict["path4"] = path4[:,:-1].reshape(2,33,15)
-        path_dict["path5"] = path5[:,:-1].reshape(2,33,15)
+        path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
+        path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
+        path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
+        path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
+        path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
         path_dict["path_prob"].append(path1[:,-1]) 
         path_dict["path_prob"].append(path2[:,-1])
         path_dict["path_prob"].append(path3[:,-1])
         path_dict["path_prob"].append(path4[:,-1])
         path_dict["path_prob"].append(path5[:,-1])
-        
-        plan_hyp_tensor = torch.tensor((path_dict['path_prob'][0],path_dict['path_prob'][1],path_dict['path_prob'][2],path_dict['path_prob'][3],path_dict['path_prob'][4]), requires_grad= False )
-        # print(plan_hyp_tensor)
-        plan_hyp_tensor = sftmax(plan_hyp_tensor)
-        # print(plan_hyp_tensor)
-        plan_branch_index = torch.argmax(plan_hyp_tensor).item()
-
-        
-        
     
+        # plan_hyp_tensor = torch.tensor((path_dict['path_prob'][0],path_dict['path_prob'][1],path_dict['path_prob'][2],path_dict['path_prob'][3],path_dict['path_prob'][4]), requires_grad= False )
+        
+        # # print(plan_hyp_tensor)
+        # plan_hyp_tensor = sftmax(plan_hyp_tensor)
+        # # print(plan_hyp_tensor)
+        # plan_branch_index = torch.argmax(plan_hyp_tensor).item()
 
+        ## lanelines
+
+
+
+        ## lanelines probability 
+
+
+        ## Road edges
+
+
+        ## Lead car
+
+
+        ## Lead Probabilities
+
+        ## Desire
+
+
+        ## meta1 
+        # meta_pilot_engaged = meta_pred[:,0]
+        # print(meta_pred.shape)
+        
+
+        ## meta desire
+        meta_desire_pred = meta_desire_pred.reshape(batch_size,4,8)
+        
+        meta_desire_pred_d =  torch.distributions.categorical.Categorical(logits = meta_desire_pred)
+        meta_desire_gt_d = torch.distributions.categorical.Categorical(logits = meta_desire_gt)
+        
+        meta_desire_loss = torch.distributions.kl.kl_divergence(meta_desire_pred_d, meta_desire_gt_d)
+        meta_desire_loss = meta_desire_loss.sum(dim=1).mean(dim =0)
+        print(meta_desire_loss)
+        ##pose
+        pose_pred = pose_pred.reshape(batch_size,2,6)        
+        mean_pose_pred = pose_pred[:,0,:]
+        std_pose_pred = pose_pred[:,1,:]
+        mean_pose_gt = pose_gt[:,0,:]
+        std_pose_gt = pose_gt[:,1,:]
+        pose_pred_dist_obj = torch.distributions.normal.Normal(mean_pose_pred, std_pose_pred)
+        pose_gt_dist_obj =  torch.distributions.normal.Normal(mean_pose_gt, std_pose_gt)
+        pose_loss = torch.distributions.kl.kl_divergence(pose_pred_dist_obj, pose_gt_dist_obj)
+        pose_loss = pose_loss.sum(dim=1).mean(dim=0)
 
         ## task loss balancing strategy: used--> most naive
         # Combined_loss= 
@@ -171,4 +225,3 @@ for epoch in tqdm(range(epochs)):
         ## backprop 
         # Combined_loss.backward()
 
-        ## 

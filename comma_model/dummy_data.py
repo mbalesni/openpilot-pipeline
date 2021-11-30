@@ -26,7 +26,7 @@ def generate_gt_arrays(frame_length):
     leads = np.random.rand(frame_length,2, 2, 6, 4)
     leads_prob = np.random.rand(frame_length,1, 3)
     desire = np.random.rand(frame_length,1, 8)
-    meta_various = np.random.rand(frame_length,1, 48)  # (1, 5*7, 6*2)
+    meta_various = np.random.rand(frame_length,1, 48)  # ni
     meta_desire_exec = np.random.rand(frame_length,4, 8)
     pose = np.random.rand(frame_length,2, 6)
 
@@ -87,7 +87,7 @@ pose.append(gt10)
 #                     meta_desire = meta_desire, 
 #                     pose = pose)
 
-data = load("inputdata.npz")
+# data = load("inputdata.npz")
 
 # # for k in data.iterkeys():
 # #     print(k)

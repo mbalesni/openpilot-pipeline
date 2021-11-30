@@ -291,9 +291,11 @@ class GRUCell(nn.Module):
         gate_x = self.x2h(x)
         gate_h = self.h2h(init_state)
 
-        gate_h = torch.squeeze(gate_h, dim=1)
+        # gate_h = gate_h[:,0,:]
+        
         # print("******************")
-        print(gate_h.shape)
+        # print(gate_h.shape)
+        # print(gate_x.shape)
         i_r, i_i, i_n = gate_x.chunk(3, 1)
         h_r, h_i, h_n = gate_h.chunk(3, 1)
 
@@ -320,11 +322,11 @@ class GRUModel(nn.Module):
         # assert conv_features.size() == (1, 1024), "conv feature tensor shape is wrong"
         # assert traffic_convention.size() == (
             # 1, 2), "traffic convention tensor shape is wrong"
-        
+    
         x = self.elu(torch.cat((conv_features, desire, traffic_convention), 1))
         in_GRU = self.relu(self.gemmtoGRU(x))
         out_GRU = self.GRUlayer(in_GRU, init_state)
-        out_GRU = torch.squeeze(out_GRU, dim=1)
+        # out_GRU = torch.squeeze(out_GRU, dim=1)
 
         return out_GRU, in_GRU
 
@@ -427,11 +429,11 @@ class OutputHeads(nn.Module):
         # paths
         path_pred_out = self.path_layer(x)
         # lanelines
-        test_tensor = self.ll_pred_1_layer(x)
-        ll1 = torch.reshape(self.ll_pred_1_layer(x), (1, 2, 66))
-        ll2 = torch.reshape(self.ll_pred_2_layer(x), (1, 2, 66))
-        ll3 = torch.reshape(self.ll_pred_3_layer(x), (1, 2, 66))
-        ll4 = torch.reshape(self.ll_pred_4_layer(x), (1, 2, 66))
+
+        ll1 = torch.reshape(self.ll_pred_1_layer(x), (self.ll_pred_1_layer(x).shape[0], 2, 66))
+        ll2 = torch.reshape(self.ll_pred_2_layer(x), (self.ll_pred_1_layer(x).shape[0], 2, 66))
+        ll3 = torch.reshape(self.ll_pred_3_layer(x), (self.ll_pred_1_layer(x).shape[0], 2, 66))
+        ll4 = torch.reshape(self.ll_pred_4_layer(x), (self.ll_pred_1_layer(x).shape[0], 2, 66))
         # concatenated along axis =2
         ll_pred = torch.cat((ll1, ll2, ll3, ll4), 2)
         ll_pred_f = ll_pred.view(-1, ll_pred.size()
@@ -439,8 +441,8 @@ class OutputHeads(nn.Module):
         # laneline prob
         ll_prob = self.ll_prob_layer(x)
         # road Edges
-        road_edg_pred1 = torch.reshape(self.road_edg_layer1(x), (1, 2, 66))
-        road_edg_pred2 = torch.reshape(self.road_edg_layer2(x), (1, 2, 66))
+        road_edg_pred1 = torch.reshape(self.road_edg_layer1(x), (self.road_edg_layer1(x).shape[0], 2, 66))
+        road_edg_pred2 = torch.reshape(self.road_edg_layer2(x), (self.road_edg_layer1(x).shape[0], 2, 66))
         road_edg_pred = torch.cat((road_edg_pred1, road_edg_pred2), 2)
         road_edg_pred_f = road_edg_pred.view(
             -1, road_edg_pred.size()[0]*road_edg_pred.size()[1]*road_edg_pred.size()[2])
@@ -494,12 +496,13 @@ class CombinedModel(nn.Module):
             input_desire, conv_features, traffic_convention, intial_state)
         input_outputmodel = torch.cat((GRU_output, preGRU_in), 1)
         Final_output = self.output_model(input_outputmodel, conv_features)
-        return Final_output
+        
+        return Final_output, GRU_output
 
 
 
 
-#####  Random arguments to define the model #####
+# ####  Random arguments to define the model #####
 # inputs_dim_outputheads = {"path": 256, "ll_pred": 32, "llprob": 16, "road_edges": 16,
 #                           "lead_car": 64, "leadprob": 16, "desire_state": 32, "meta": [64, 32], "pose": 32}
 # output_dim_outputheads = {"path": 4955, "ll_pred": 132, "llprob": 8, "road_edges": 132,
@@ -507,7 +510,7 @@ class CombinedModel(nn.Module):
 # filters_list = [16, 24, 48, 88, 120, 208, 352]
 # expansion = 6
 
-# # dummy inputs
+# # # dummy inputs
 # image = torch.randn(1,12, 128, 256)
 # desire = torch.rand(1, 8)
 # state = torch.rand(1, 512)
