@@ -79,18 +79,22 @@ class CommaLoader(Dataset):
             recurrent_state = torch.from_numpy(self.input['recurrent_state'][0][index]).float().to(self.device)
             
             plan = torch.from_numpy(self.gt['plan'][0][index]).float().to(self.device)
+            plan_prob = torch.from_numpy(self.gt['plan_prob'][0][index]).float().to(self.device)
             ll = torch.from_numpy(self.gt['ll'][0][index]).float().to(self.device)
             ll_prob = torch.from_numpy(self.gt['ll_prob'][0][index]).float().to(self.device)
             road_edges = torch.from_numpy(self.gt['road_edges'][0][index]).float().to(self.device)
             leads = torch.from_numpy(self.gt['leads'][0][index]).float().to(self.device)
             leads_prob = torch.from_numpy(self.gt['leads_prob'][0][index]).float().to(self.device)
+            lead_prob = torch.from_numpy(self.gt['lead_prob'][0][index]).float().to(self.device)
             desire_gt = torch.from_numpy(self.gt['desire'][0][index]).float().to(self.device)
+            meta_eng = torch.from_numpy(self.gt['meta_eng'][0][index]).float().to(self.device)
             meta_various = torch.from_numpy(self.gt['meta_various'][0][index]).float().to(self.device)
+            meta_blinkers = torch.from_numpy(self.gt['meta_blinkers'][0][index]).float().to(self.device)
             meta_desire = torch.from_numpy(self.gt['meta_desire'][0][index]).float().to(self.device)
             pose = torch.from_numpy(self.gt['pose'][0][index]).float().to(self.device)
 
-            return (imgs, desire, traffic_conv, recurrent_state), (plan,
-            ll, ll_prob, road_edges, leads, leads_prob, desire_gt, meta_various,
+            return (imgs, desire, traffic_conv, recurrent_state), (plan, plan_prob,
+            ll, ll_prob, road_edges, leads, leads_prob, lead_prob, desire_gt, meta_eng, meta_various, meta_blinkers,
             meta_desire, pose)
             
         elif self.dummy_test and self.test:
@@ -133,8 +137,11 @@ class Transformations():
 
 # if __name__ == "__main__":
 
-    # numpy_paths = ["inputdata.npz","gtdata.npz"]
-    # devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     numpy_paths = ["inputdata.npz","gtdata.npz"]
+#     devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # comma_data = CommaLoader(numpy_paths,0.8, dummy_test= True, train= True)
-    # comma_loader = DataLoader(comma_data, batch_size=2)
+#     comma_data = CommaLoader(numpy_paths,0.8, dummy_test= True, train= True)
+#     comma_loader = DataLoader(comma_data, batch_size=2)
+
+#     for i, j in comma_loader:
+#         print(j[9].shape)

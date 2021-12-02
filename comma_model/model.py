@@ -290,7 +290,6 @@ class GRUCell(nn.Module):
 
         gate_x = self.x2h(x)
         gate_h = self.h2h(init_state)
-    
         i_r, i_i, i_n = gate_x.chunk(3, 1)
         h_r, h_i, h_n = gate_h.chunk(3, 1)
 
@@ -440,7 +439,7 @@ class OutputHeads(nn.Module):
         road_edg_pred2 = torch.reshape(self.road_edg_layer2(x), (self.road_edg_layer1(x).shape[0], 2, 66))
         road_edg_pred = torch.cat((road_edg_pred1, road_edg_pred2), 2)
         road_edg_pred_f = road_edg_pred.view(
-            -1, road_edg_pred.size()[0]*road_edg_pred.size()[1]*road_edg_pred.size()[2])
+            -1, road_edg_pred.size()[1]*road_edg_pred.size()[2])
         # lead car
         lead_car_pred = self.lead_car_layer(x)
         # lead prob

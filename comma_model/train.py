@@ -125,17 +125,24 @@ for epoch in tqdm(range(epochs)):
         
         #gt
         plan_gt = labels[0].to(device)
-        lane_line_gt = labels[1].to(device)
-        lane_prob_gt = labels[2].to(device)
-        road_edges_gt = labels[3].to(device) 
-        leads_gt = labels[4].to(device)
-        lead_prob_gt = labels[5].to(device)
-        desire_gt = labels[6].to(device)
-        meta_gt = labels[7].to(device)
-        meta_desire_gt = labels[8].to(device)
-        pose_gt = labels[9].to(device)
+        plan_prob = labels[1].to(device)
+        lane_line_gt = labels[2].to(device)
+        lane_prob_gt = labels[3].to(device)
+        road_edges_gt = labels[4].to(device) 
+        leads_gt = labels[5].to(device)
+        leads_prob_gt = labels[6].to(device)
+        lead_prob_gt = labels[7].to(device)
+        desire_gt = labels[8].to(device)
+        meta_eng_gt = labels[9].to(device)
+        meta_various_gt = labels[10].to(device)
+        meta_blinkers_gt = labels[11].to(device)
+        meta_desire_gt = labels[12].to(device)
+        pose_gt = labels[13].to(device)
+
+        
         desire = torch.squeeze(desire,dim =1)
         traffic_convention = torch.squeeze(traffic_convention, dim = 1)
+    
         output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
         plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
         
@@ -149,6 +156,7 @@ for epoch in tqdm(range(epochs)):
         5. for paths i need to take --- > argmin(losses) and add the loss in the final loss with that index
         6. for now use the most basic version of the pipeline. 
         7. for intial training give desire, traffic conv to zeros.
+        8. How to scale the losses into scalar values for multidimensional kldiv values
         """
 
         ## path plan
@@ -181,63 +189,80 @@ for epoch in tqdm(range(epochs)):
 
         ## lanelines probability 
 
-
         ## Road edges
+        road_edges_pred = road_edges_pred.reshape(batch_size,2,2,33,2)
+        
+        mean_road_edges_pred = road_edges_pred[:,:,0,:,:]
+        mean_road_edges_gt = road_edges_gt[:,:,0,:,:]
 
+        std_road_edges_pred = road_edges_pred[:,:,0,:,:]
+        std_road_edges_gt = road_edges_gt[:,:,0,:,:]
+        edges_pred_d = torch.distributions.normal.Normal(mean_road_edges_pred, std_road_edges_pred)
+        edges_gt_d = torch.distributions.normal.Normal(mean_road_edges_gt, std_road_edges_gt)
+        road_edges_loss = torch.distributions.kl.kl_divergence(edges_pred_d, edges_gt_d).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
+        print(road_edges_loss)
 
         ## Lead car
+        leads_pred = leads_pred.reshape(batch_size, 2, 51)
+        leads_pred_other = leads_pred[:,:, :48].reshape(batch_size,2,2,6,4)
+        leads_pred_prob = leads_pred[:,:, 48:]
+        
+        mean_leads_pred_other = leads_pred_other[:,:,0,:,:]
+        mean_leads_gt = leads_gt[:,:,0,:,:]
 
+        std_leads_pred_other = leads_pred_other[:,:,1,:,:]
+        std_leads_gt =leads_gt[:,:,1,:,:]
 
-        ## Lead Probabilities)
+        d1 = torch.distributions.normal.Normal(mean_leads_pred_other, std_leads_pred_other)
+        d2 = torch.distributions.normal.Normal(mean_leads_gt, std_leads_gt)
+        leads_other_loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
 
+        d3 = torch.distributions.categorical.Categorical(logits = leads_pred_prob)
+        d4 = torch.distributions.categorical.Categorical(logits = leads_prob_gt)
+        leads_prob_loss = torch.distributions.kl.kl_divergence(d3, d4).sum(dim = 1).mean(dim =0)
+        
+        Leads_loss = leads_other_loss + leads_prob_loss
+        
+        ## Lead Probabilities
+        lead_prob_gt = lead_prob_gt[:,0,:]
 
-
+        lead_prob_pred_d=  torch.distributions.categorical.Categorical(logits = lead_prob_pred)
+        lead_prob_gt_d = torch.distributions.categorical.Categorical(logits = lead_prob_gt)
+        lead_prob_loss = torch.distributions.kl.kl_divergence(lead_prob_pred_d, lead_prob_gt_d).mean(dim=0)
+        
         ## Desire
-        if "dummy" or "Dummy" in name:
-            desire_gt = desire_gt[:,0,:]
-        else :
-            desire_gt = desire_gt 
-
-            
+        
+        desire_gt = desire_gt[:,0,:]
         desire_pred_d = torch.distributions.categorical.Categorical(logits = desire_pred)
         desire_gt_d = torch.distributions.categorical.Categorical(logits = desire_gt)
         desire_loss = torch.distributions.kl.kl_divergence(desire_pred_d, desire_gt_d).mean(dim=0)
 
         ## meta1 
-        if "dummy" or "Dummy" in name:
-            meta_gt = meta_gt[:,0,:]
-            meta_gt_engagement = meta_gt[:,0]
-            meta_gt_various = meta_gt[:,1:36].reshape(batch_size, 5, 7)
-            meta_gt_blinkers = meta_gt[:,36:].reshape(batch_size, 6, 2)
-        else:
-            pass # fill condition for real data
-
         
-        meta_pred_engagement = meta_pred[:,0]
+        meta_pred_engagement = meta_pred[:,0].reshape(batch_size,1)
         meta_pred_various = meta_pred[:,1:36].reshape(batch_size, 5, 7)
         meta_pred_blinkers = meta_pred[:,36:].reshape(batch_size, 6, 2)
-
         meta_pred_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_pred_engagement)
-        meta_gt_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_gt_engagement)
+        meta_gt_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_eng_gt)
         meta_engagement_loss = torch.distributions.kl.kl_divergence(meta_pred_engagement_d, meta_gt_engagement_d).mean(dim=0)
-
+        
         meta_pred_various_d = torch.distributions.categorical.Categorical(logits = meta_pred_various)
-        meta_gt_various_d = torch.distributions.categorical.Categorical(logits = meta_gt_various)
-        meat_various_loss = torch.distributions.kl.kl_divergence(meta_pred_various_d, meta_gt_various_d).sum(dim =1).mean(dim =0)
-
+        meta_gt_various_d = torch.distributions.categorical.Categorical(logits = meta_various_gt)
+        meta_various_loss = torch.distributions.kl.kl_divergence(meta_pred_various_d, meta_gt_various_d).sum(dim =1).mean(dim =0)
+        
         meta_pred_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_pred_blinkers)
-        meta_gt_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_gt_blinkers)
+        meta_gt_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_blinkers_gt)
         meta_blinkers_loss = torch.distributions.kl.kl_divergence(meta_pred_blinkers_d, meta_gt_blinkers_d).sum(dim =1).mean(dim =0)
                 
-        meta1loss = meta_engagement_loss + meat_various_loss + meta_blinkers_loss
+        meta1loss = meta_engagement_loss + meta_various_loss + meta_blinkers_loss
+
 
         ## meta desire
         meta_desire_pred = meta_desire_pred.reshape(batch_size,4,8)
         meta_desire_pred_d =  torch.distributions.categorical.Categorical(logits = meta_desire_pred)
         meta_desire_gt_d = torch.distributions.categorical.Categorical(logits = meta_desire_gt)
-        meta_desire_loss = torch.distributions.kl.kl_divergence(meta_desire_pred_d, meta_desire_gt_d)
-        meta_desire_loss = meta_desire_loss.sum(dim=1).mean(dim =0)
-        
+        meta_desire_loss = torch.distributions.kl.kl_divergence(meta_desire_pred_d, meta_desire_gt_d).sum(dim=1).mean(dim =0)
+       
         ##pose
         pose_pred = pose_pred.reshape(batch_size,2,6)        
         mean_pose_pred = pose_pred[:,0,:]
