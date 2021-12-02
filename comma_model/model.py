@@ -290,12 +290,7 @@ class GRUCell(nn.Module):
 
         gate_x = self.x2h(x)
         gate_h = self.h2h(init_state)
-
-        # gate_h = gate_h[:,0,:]
-        
-        # print("******************")
-        # print(gate_h.shape)
-        # print(gate_x.shape)
+    
         i_r, i_i, i_n = gate_x.chunk(3, 1)
         h_r, h_i, h_n = gate_h.chunk(3, 1)
 

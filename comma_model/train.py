@@ -188,25 +188,56 @@ for epoch in tqdm(range(epochs)):
         ## Lead car
 
 
-        ## Lead Probabilities
+        ## Lead Probabilities)
+
+
 
         ## Desire
+        if "dummy" or "Dummy" in name:
+            desire_gt = desire_gt[:,0,:]
+        else :
+            desire_gt = desire_gt 
 
+            
+        desire_pred_d = torch.distributions.categorical.Categorical(logits = desire_pred)
+        desire_gt_d = torch.distributions.categorical.Categorical(logits = desire_gt)
+        desire_loss = torch.distributions.kl.kl_divergence(desire_pred_d, desire_gt_d).mean(dim=0)
 
         ## meta1 
-        # meta_pilot_engaged = meta_pred[:,0]
-        # print(meta_pred.shape)
+        if "dummy" or "Dummy" in name:
+            meta_gt = meta_gt[:,0,:]
+            meta_gt_engagement = meta_gt[:,0]
+            meta_gt_various = meta_gt[:,1:36].reshape(batch_size, 5, 7)
+            meta_gt_blinkers = meta_gt[:,36:].reshape(batch_size, 6, 2)
+        else:
+            pass # fill condition for real data
+
         
+        meta_pred_engagement = meta_pred[:,0]
+        meta_pred_various = meta_pred[:,1:36].reshape(batch_size, 5, 7)
+        meta_pred_blinkers = meta_pred[:,36:].reshape(batch_size, 6, 2)
+
+        meta_pred_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_pred_engagement)
+        meta_gt_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_gt_engagement)
+        meta_engagement_loss = torch.distributions.kl.kl_divergence(meta_pred_engagement_d, meta_gt_engagement_d).mean(dim=0)
+
+        meta_pred_various_d = torch.distributions.categorical.Categorical(logits = meta_pred_various)
+        meta_gt_various_d = torch.distributions.categorical.Categorical(logits = meta_gt_various)
+        meat_various_loss = torch.distributions.kl.kl_divergence(meta_pred_various_d, meta_gt_various_d).sum(dim =1).mean(dim =0)
+
+        meta_pred_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_pred_blinkers)
+        meta_gt_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_gt_blinkers)
+        meta_blinkers_loss = torch.distributions.kl.kl_divergence(meta_pred_blinkers_d, meta_gt_blinkers_d).sum(dim =1).mean(dim =0)
+                
+        meta1loss = meta_engagement_loss + meat_various_loss + meta_blinkers_loss
 
         ## meta desire
         meta_desire_pred = meta_desire_pred.reshape(batch_size,4,8)
-        
         meta_desire_pred_d =  torch.distributions.categorical.Categorical(logits = meta_desire_pred)
         meta_desire_gt_d = torch.distributions.categorical.Categorical(logits = meta_desire_gt)
-        
         meta_desire_loss = torch.distributions.kl.kl_divergence(meta_desire_pred_d, meta_desire_gt_d)
         meta_desire_loss = meta_desire_loss.sum(dim=1).mean(dim =0)
-        print(meta_desire_loss)
+        
         ##pose
         pose_pred = pose_pred.reshape(batch_size,2,6)        
         mean_pose_pred = pose_pred[:,0,:]
