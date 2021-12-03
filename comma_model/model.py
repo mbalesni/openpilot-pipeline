@@ -430,8 +430,7 @@ class OutputHeads(nn.Module):
         ll4 = torch.reshape(self.ll_pred_4_layer(x), (self.ll_pred_1_layer(x).shape[0], 2, 66))
         # concatenated along axis =2
         ll_pred = torch.cat((ll1, ll2, ll3, ll4), 2)
-        ll_pred_f = ll_pred.view(-1, ll_pred.size()
-                                 [0]*ll_pred.size()[1]*ll_pred.size()[2])
+        ll_pred_f = ll_pred.view(-1, ll_pred.size()[1]*ll_pred.size()[2])
         # laneline prob
         ll_prob = self.ll_prob_layer(x)
         # road Edges
