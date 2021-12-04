@@ -112,12 +112,29 @@ criterion1 = nn.KLDivLoss()
 criterion2 = nn.CrossEntropyLoss()
 sftmax = nn.Softmax(dim=0)
 
+""""
+        How to approach this situation :::
+        1. create distribution objects and calcualte KL div. 
+        2. class prob=== categorical distribution
+        3. single logit === bernouolli distribution 
+        4. for mean and std values -- normal distribution0
+        5. for paths i need to take --- > argmin(losses) and add the loss in the final loss with that index
+        6. for now use the most basic version of the pipeline. 
+        7. for intial training give desire, traffic conv to zeros.
+        8. How to scale the losses into scalar values for multidimensional kldiv values
+        8. like for road edges and lanelines I have different branches so should i calculate loss for each of them separately
+            and add them up or take them together as I am doing right now? 
+        9. If multi-hypothesis exists it will be there for all the rest of the outputs with probabilities along with the output
+            like plan, lanellines, road-edges and more... 
+"""
+
 # ## train loop 
 recurrent_state = torch.zeros(batch_size,512)
 for epoch in tqdm(range(epochs)):
     for i , data in tqdm(enumerate(train_loader)):
         input, labels = data
         optimizer.zero_grad()
+        
         #input
         yuv_images = input[0].to(device)
         desire = input[1].to(device)
@@ -125,7 +142,7 @@ for epoch in tqdm(range(epochs)):
         
         #gt
         plan_gt = labels[0].to(device)
-        plan_prob = labels[1].to(device)
+        plan_prob_gt = labels[1].to(device)
         lane_line_gt = labels[2].to(device)
         lane_prob_gt = labels[3].to(device)
         road_edges_gt = labels[4].to(device) 
@@ -138,57 +155,91 @@ for epoch in tqdm(range(epochs)):
         meta_blinkers_gt = labels[11].to(device)
         meta_desire_gt = labels[12].to(device)
         pose_gt = labels[13].to(device)
-
-        
         desire = torch.squeeze(desire,dim =1)
         traffic_convention = torch.squeeze(traffic_convention, dim = 1)
     
         output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
         plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
         
-        recurrent_state = output2
-        """"
-        How to approach this situation :::
-        1. create distribution objects and calcualte KL div. 
-        2. class prob=== categorical distribution
-        3. single logit === bernouolli distribution 
-        4. for mean and std values -- normal distribution0
-        5. for paths i need to take --- > argmin(losses) and add the loss in the final loss with that index
-        6. for now use the most basic version of the pipeline. 
-        7. for intial training give desire, traffic conv to zeros.
-        8. How to scale the losses into scalar values for multidimensional kldiv values
-        """
-
+        recurrent_state = output2 ## Feed back the recurrent state
+        
         ## path plan
         path_dict = {}
         path_plans =  plan_pred
         path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
-
         path_dict["path_prob"] = []
         path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
         path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
         path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
         path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
         path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path_prob"].append(path1[:,-1]) 
-        path_dict["path_prob"].append(path2[:,-1])
-        path_dict["path_prob"].append(path3[:,-1])
-        path_dict["path_prob"].append(path4[:,-1])
-        path_dict["path_prob"].append(path5[:,-1])
-    
-        # plan_hyp_tensor = torch.tensor((path_dict['path_prob'][0],path_dict['path_prob'][1],path_dict['path_prob'][2],path_dict['path_prob'][3],path_dict['path_prob'][4]), requires_grad= False )
+        path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
+                        path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
+        #naive path_loss---> train all the paths together
+
+        path1_gt = plan_gt[:,0,:,:,:] 
+        path2_gt = plan_gt[:,1,:,:,:]
+        path3_gt = plan_gt[:,2,:,:,:]
+        path4_gt = plan_gt[:,3,:,:,:]
+        path5_gt =plan_gt[:,4,:,:,:]
         
-        # # print(plan_hyp_tensor)
-        # plan_hyp_tensor = sftmax(plan_hyp_tensor)
-        # # print(plan_hyp_tensor)
-        # plan_branch_index = torch.argmax(plan_hyp_tensor).item()
+        def mean_std(array):
+            mean = array[:,0,:,:]
+            std = array[:,1,:,:]
+            return mean, std
+
+        mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
+        mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
+
+        mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
+        mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
+
+        mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
+        mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
+        
+        mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
+        mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
+
+        mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
+        mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
+        
+        
+        def calcualte_path_loss(mean1, mean2, std1, std2):
+            d1 = torch.distributions.normal.Normal(mean1, std1)
+            d2 = torch.distributions.normal.Normal(mean2, std2)
+            loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =0).sum(dim =0).mean(dim =0)
+            return loss
+
+        path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
+        path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
+        path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
+        path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
+        path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
+
+        path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
+        path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
+        path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=0).mean(dim=0)
+        print(path_prob_loss)
+        path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
 
         ## lanelines
+        lane_pred = lane_pred.reshape(batch_size, 4,2,33,2)
+        mean_lane_pred = lane_pred[:,:,0,:,:] 
+        mean_lane_gt =  lane_line_gt[:,:,0,:,:]
+        std_lane_pred = lane_pred[:,:,1,:,:]
+        std_lane_gt = lane_line_gt[:,:,0,:,:]
 
+        lane_pred_d = torch.distributions.normal.Normal(mean_lane_pred, std_lane_pred)
+        lane_gt_d = torch.distributions.normal.Normal(mean_lane_gt, std_lane_gt)
+        lane_loss = torch.distributions.kl.kl_divergence(lane_pred_d, lane_gt_d).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
 
-
-        ## lanelines probability 
-
+        ## lanelines probability
+        lane_prob_pred = lane_prob_pred.reshape(batch_size,4,2)
+        
+        lane_prob_pred_d = torch.distributions.categorical.Categorical(logits = lane_prob_pred)
+        lane_prob_gt_d = torch.distributions.categorical.Categorical(logits = lane_prob_gt)
+        lane_prob_loss = torch.distributions.kl.kl_divergence(lane_prob_pred_d, lane_prob_gt_d).sum(dim=1).mean(dim=0)
+        
         ## Road edges
         road_edges_pred = road_edges_pred.reshape(batch_size,2,2,33,2)
         
@@ -200,7 +251,6 @@ for epoch in tqdm(range(epochs)):
         edges_pred_d = torch.distributions.normal.Normal(mean_road_edges_pred, std_road_edges_pred)
         edges_gt_d = torch.distributions.normal.Normal(mean_road_edges_gt, std_road_edges_gt)
         road_edges_loss = torch.distributions.kl.kl_divergence(edges_pred_d, edges_gt_d).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
-        print(road_edges_loss)
 
         ## Lead car
         leads_pred = leads_pred.reshape(batch_size, 2, 51)
@@ -231,14 +281,12 @@ for epoch in tqdm(range(epochs)):
         lead_prob_loss = torch.distributions.kl.kl_divergence(lead_prob_pred_d, lead_prob_gt_d).mean(dim=0)
         
         ## Desire
-        
         desire_gt = desire_gt[:,0,:]
         desire_pred_d = torch.distributions.categorical.Categorical(logits = desire_pred)
         desire_gt_d = torch.distributions.categorical.Categorical(logits = desire_gt)
         desire_loss = torch.distributions.kl.kl_divergence(desire_pred_d, desire_gt_d).mean(dim=0)
 
         ## meta1 
-        
         meta_pred_engagement = meta_pred[:,0].reshape(batch_size,1)
         meta_pred_various = meta_pred[:,1:36].reshape(batch_size, 5, 7)
         meta_pred_blinkers = meta_pred[:,36:].reshape(batch_size, 6, 2)
@@ -255,7 +303,6 @@ for epoch in tqdm(range(epochs)):
         meta_blinkers_loss = torch.distributions.kl.kl_divergence(meta_pred_blinkers_d, meta_gt_blinkers_d).sum(dim =1).mean(dim =0)
                 
         meta1loss = meta_engagement_loss + meta_various_loss + meta_blinkers_loss
-
 
         ## meta desire
         meta_desire_pred = meta_desire_pred.reshape(batch_size,4,8)
@@ -275,7 +322,7 @@ for epoch in tqdm(range(epochs)):
         pose_loss = pose_loss.sum(dim=1).mean(dim=0)
 
         ## task loss balancing strategy: used--> most naive
-        # Combined_loss= 
+        Combined_loss= path_plan_loss + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss
 
 
         ## backprop 
