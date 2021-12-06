@@ -45,12 +45,19 @@ def frames_to_tensor(frames):
 def generate_ground_truth( camerafile, supercombo ):
   splits = camerafile.split('/')
   path_to_video_file = '/'.join(splits[:-1])
+  file_name = splits[-1]
 
-  images = get_train_imgs( path_to_segment=path_to_video_file, video_file='video.hevc' )
-
-  # if exists(path_to_video_file + '/marker_and_leads_ground_truth.npz'):
-  #   print( "File already exist!" )
-  #   return
+  if exists(path_to_video_file + '/marker_and_leads_ground_truth.npz' ):
+    print( "File already exist!" )
+    return
+  
+  images = []
+  try:  
+    images = get_train_imgs( path_to_segment=path_to_video_file, video_file=file_name )
+  except Exception as e:
+    print( "can't read images" )
+    print(e)
+    return 
 
   state = np.zeros((1,512)).astype( np.float32 )
   desire = np.zeros((1,8)).astype( np.float32 )
@@ -110,7 +117,11 @@ def generate_ground_truth( camerafile, supercombo ):
     # Important to refeed the state
     state = [recurrent_state]
 
-  np.savez_compressed(path_to_video_file + '/marker_and_leads_ground_truth.npz',
+  if not plans:
+    return 
+
+  try:
+    np.savez_compressed(path_to_video_file + '/marker_and_leads_ground_truth.npz',
     plans=np.stack( plans ),
     plans_prob=np.stack( plans_prob ),
     lanelines=np.stack( lanelines ),
@@ -125,7 +136,8 @@ def generate_ground_truth( camerafile, supercombo ):
     meta_blinkers_prob=np.stack( meta_blinkers_prob ),
     meta_desires=np.stack( meta_desires ),
     pose=np.stack( poses ) )
-
+  except:
+    print( "Can't save npz file" )
 
 if __name__ == '__main__':
   camerafile = sys.argv[1]

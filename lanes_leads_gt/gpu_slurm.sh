@@ -7,7 +7,7 @@
 #SBATCH -t 06:59:00
 #SBATCH --ntasks=1
 #SBATCH --mem=40G
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=10
 #SBATCH --gres=gpu:tesla:1
 ## #SBATCH --exclude=falcon4
 
