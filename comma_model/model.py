@@ -31,7 +31,7 @@ class IntialAggregationBlock(nn.Module):
         self.conv2 = nn.Conv2d(32, 32, kernel_size=3,
                                padding=(1, 1), stride=(1, 1))
         self.conv3 = nn.Conv2d(32, 16, kernel_size=1, stride=(1, 1))
-        self.elu = ELU()
+        self.elu = ELU( inplace=False)
         self.batchnorm1 = nn.BatchNorm2d(32)
         self.batchnorm2 = nn.BatchNorm2d(32)
         self.batchnorm3 = nn.BatchNorm2d(16)
