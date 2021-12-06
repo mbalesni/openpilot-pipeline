@@ -2,6 +2,7 @@ import argparse
 import itertools
 import os 
 import cv2
+import time
 import numpy as np 
 from tqdm import tqdm
 import torch 
@@ -10,6 +11,8 @@ from torchvision.transforms import functional as F
 import torch.optim as topt
 from Dataloader import *
 from model import *
+from onnx2pytorch import ConvertModel
+import onnx
 
 cuda = torch.cuda.is_available()
 if cuda:
@@ -29,7 +32,7 @@ print("seed={}".format(seed))
 parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
 # parser.add_argument("--datadir", type=str, default = "", choices=["dummy", "gen_gt"], help= "directory in which the dummy data or generated gt lies" )
 # parser.add_argument("--num_gpu", type=int, default =1, help= "number of gpus")
-# parser.add_argument("--mode", type =str, default="train", choices = ["train", "val", "eval"])
+parser.add_argument("--train", type =str, default="train", choices = ["train", "test"])
 # parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
 # parser.add_argument("--losstype", type= str, default= "KL_div", help= "choose between Kl and NNL loss")
 parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["scratch", "onnx"], help = "choose type of model for train")
@@ -40,8 +43,9 @@ args = parser.parse_args()
 #Hyperparams
 name = "Dummy_comma_pipeline_nov26"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
+onnx_path = 'supercombo.onnx'
 lr = (1e-4, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
-diff_lr = True
+diff_lr = False
 l2_lambda = (1e-4,1e-4,1e-4) 
 lrs_factor = 0.75
 lrs_patience = 50
@@ -76,24 +80,51 @@ filters_list = [16, 24, 48, 88, 120, 208, 352]
 expansion = 6
 param_scratch_model = [filters_list, expansion, inputs_dim_outputheads,
                      output_dim_outputheads ]
+pathplan_layer_names  = ["Gemm_959", "Gemm_981","Gemm_983","Gemm_1036"]
 
+def load_model(params_scratch, pathplan):
 
-def load_model(params_scratch):
     if args.modeltype == 'scratch':
         model = CombinedModel(params_scratch[0], params_scratch[1],
                            params_scratch[2], params_scratch[3])
-    else : 
-        pass ## onnx-pytorch model 
-    
+    else :
+        onnx_model = onnx.load(onnx_path)
+        model = ConvertModel(onnx_model)  #pretrained_model
+
+        def reinitialise_weights(layer_weight):
+            model.layer_weight = torch.nn.Parameter(torch.nn.init.xavier_uniform_(layer_weight))
+
+        for name, layer in model.named_children():
+            if isinstance(layer, torch.nn.Linear) and name in pathplan:
+                reinitialise_weights(layer.weight)
+                layer.bias.data.fill_(0.01)     
     return model 
 
-comma_model = load_model(param_scratch_model)
+comma_model = load_model(param_scratch_model, pathplan_layer_names)
 comma_model = comma_model.to(device)
 
-### Define Loss and optimizer
+#allowing grad only for path_plan
+for name, param in comma_model.named_parameters():
+    name_layer= name.split(".")
+    if name_layer[0] in pathplan_layer_names:
+        param.requires_grad = True
+    else:
+        param.requires_grad = False
+
+## Define optimizer and scheduler
 #diff. learning rate for different parts of the network.
 if not diff_lr:
     param_group = comma_model.parameters()
+
+    #optimizer for onnx and when diff_lr not True
+    if args.modeltype == "onnx":
+        optimizer = topt.Adam(param_group,lr[0], weight_decay=l2_lambda[0])
+        scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
+                                                 threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
+                                                 cooldown=lrs_cd)  
+    else :
+        pass # needs to be filled 
+
 else:
     conv, gru, outhead = comma_model.getGroupParams()    
     gru = list(itertools.chain.from_iterable(gru))
@@ -103,9 +134,9 @@ else:
                     { "params": gru, "lr": lr[1], "weight_decay": l2_lambda[1] },
                     { "params": outhead, "lr": lr[2], "weight_decay": l2_lambda[2]}]
     
-optimizer = topt.Adam(param_group,lr[0], weight_decay=l2_lambda[0])
-#choice of lr_scheduler can be changed
-scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
+    optimizer = topt.Adam(param_group,lr[0], weight_decay=l2_lambda[0])
+    #choice of lr_scheduler can be changed
+    scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)
 criterion1 = nn.KLDivLoss()
@@ -131,7 +162,12 @@ sftmax = nn.Softmax(dim=0)
 # ## train loop 
 recurrent_state = torch.zeros(batch_size,512)
 for epoch in tqdm(range(epochs)):
-    for i , data in tqdm(enumerate(train_loader)):
+    
+    start_point = time.time()
+    tr_loss = np.array(0.0)
+    run_loss = 0.0
+
+    for tr_it , data in tqdm(enumerate(train_loader)):
         input, labels = data
         optimizer.zero_grad()
         
@@ -207,7 +243,7 @@ for epoch in tqdm(range(epochs)):
         def calcualte_path_loss(mean1, mean2, std1, std2):
             d1 = torch.distributions.normal.Normal(mean1, std1)
             d2 = torch.distributions.normal.Normal(mean2, std2)
-            loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =0).sum(dim =0).mean(dim =0)
+            loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
             return loss
 
         path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
@@ -218,8 +254,8 @@ for epoch in tqdm(range(epochs)):
 
         path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
         path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
-        path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=0).mean(dim=0)
-        print(path_prob_loss)
+        path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
+    
         path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
 
         ## lanelines
@@ -231,8 +267,8 @@ for epoch in tqdm(range(epochs)):
 
         lane_pred_d = torch.distributions.normal.Normal(mean_lane_pred, std_lane_pred)
         lane_gt_d = torch.distributions.normal.Normal(mean_lane_gt, std_lane_gt)
-        lane_loss = torch.distributions.kl.kl_divergence(lane_pred_d, lane_gt_d).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
-
+        lane_loss = torch.distributions.kl.kl_divergence(lane_pred_d, lane_gt_d).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+        
         ## lanelines probability
         lane_prob_pred = lane_prob_pred.reshape(batch_size,4,2)
         
@@ -250,8 +286,8 @@ for epoch in tqdm(range(epochs)):
         std_road_edges_gt = road_edges_gt[:,:,0,:,:]
         edges_pred_d = torch.distributions.normal.Normal(mean_road_edges_pred, std_road_edges_pred)
         edges_gt_d = torch.distributions.normal.Normal(mean_road_edges_gt, std_road_edges_gt)
-        road_edges_loss = torch.distributions.kl.kl_divergence(edges_pred_d, edges_gt_d).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
-
+        road_edges_loss = torch.distributions.kl.kl_divergence(edges_pred_d, edges_gt_d).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+       
         ## Lead car
         leads_pred = leads_pred.reshape(batch_size, 2, 51)
         leads_pred_other = leads_pred[:,:, :48].reshape(batch_size,2,2,6,4)
@@ -265,7 +301,7 @@ for epoch in tqdm(range(epochs)):
 
         d1 = torch.distributions.normal.Normal(mean_leads_pred_other, std_leads_pred_other)
         d2 = torch.distributions.normal.Normal(mean_leads_gt, std_leads_gt)
-        leads_other_loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim=1).sum(dim=1).sum(dim=0).mean(dim=0)
+        leads_other_loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
 
         d3 = torch.distributions.categorical.Categorical(logits = leads_pred_prob)
         d4 = torch.distributions.categorical.Categorical(logits = leads_prob_gt)
@@ -273,7 +309,7 @@ for epoch in tqdm(range(epochs)):
         
         Leads_loss = leads_other_loss + leads_prob_loss
         
-        ## Lead Probabilities
+        # ## Lead Probabilities
         lead_prob_gt = lead_prob_gt[:,0,:]
 
         lead_prob_pred_d=  torch.distributions.categorical.Categorical(logits = lead_prob_pred)
@@ -322,9 +358,13 @@ for epoch in tqdm(range(epochs)):
         pose_loss = pose_loss.sum(dim=1).mean(dim=0)
 
         ## task loss balancing strategy: used--> most naive
-        Combined_loss= path_plan_loss + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss
+        Combined_loss= (path_plan_loss + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
 
+        # print(tr_it)
+        # if args.mode == "train":
 
         ## backprop 
-        # Combined_loss.backward()
+        Combined_loss.backward()
+        optimizer.step()
+        
 
