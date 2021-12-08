@@ -1,3 +1,5 @@
+print("I am in the job")
+
 import cv2
 import sys 
 import os
@@ -14,6 +16,7 @@ gt_files_exist_path = sorted(glob.glob(comma_recordings_path + "/**/marker_and_l
 hevc_file_paths = []
 gt_file_paths = []
 
+print("loading the respective paths")
 for paths in gt_files_exist_path:
     dir_path, file_name = os.path.split(paths)
     if any(fname.endswith('.hevc') for fname in os.listdir(dir_path)):
@@ -21,9 +24,7 @@ for paths in gt_files_exist_path:
             if file == "fcamera.hevc" or file == "video.hevc":
                 hevc_file_paths.append(os.path.join(dir_path,file))
                 gt_file_paths.append(os.path.join(dir_path,file_name))
-
-# # print(len(hevc_file_paths))
-# # print(len(gt_file_paths))
+print("paths loaded")
 
 ## load npz files by iterate over gt_files and save .h5 file in the same path
 def save_path_h5(file_path):
@@ -46,20 +47,12 @@ def loadhevc_frames(video_path, folder_path):
     
         cv2.imwrite(folder_path + str(index) + ".png", frame )
         index +=1
-               
-
-# # path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/fcamera.hevc"
-# # f_path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/frames_hevc/"
-
-# #save_path_h5("/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/marker_and_leads_ground_truth.npz")
-
+            
 # # loadhevc_frames(path, f_path)
-
+print("saving .h5 files and converting the video file into frame and storing in hevc_frame folder")
 for i in range(len(hevc_file_paths)):
     video_dir_path, hevc_file = os.path.split(hevc_file_paths[i])
     frame_file_path = video_dir_path + "/hevc_frames/"
-    # print(hevc_file_paths[i])
-    # print(frame_file_path)
 
     if not os.path.exists(frame_file_path):
         os.makedirs(frame_file_path)
@@ -68,9 +61,12 @@ for i in range(len(hevc_file_paths)):
 
     loadhevc_frames(hevc_file_paths[i],frame_file_path)
     save_path_h5(gt_file_paths[i])
-    
+print("Done")
 
+# # path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/fcamera.hevc"
+# # f_path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/frames_hevc/"
 
+# #save_path_h5("/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/marker_and_leads_ground_truth.npz")
 
 
     
