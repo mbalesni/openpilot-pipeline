@@ -1,0 +1,9 @@
+__pycache__/
+../__pycache__/
+Untitled.ipynb
+.ipynb_checkpoints
+gtdata.npz
+inputdata.npz
+*.out
+
+
