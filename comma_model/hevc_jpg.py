@@ -6,11 +6,7 @@ import numpy as np
 import h5py
 sys.path.append("../")
 from utils import get_train_imgs
-"""
-tasks:  1. I need to find the all the paths for fcamera.hevc and video.hevc and gt in comma_recordings.
-        2. Convert the video files into frames and save them --- and path plans into h5py
-        3. need to check if the number of frames and 
-"""
+
 comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
 
 gt_files_exist_path = sorted(glob.glob(comma_recordings_path + "/**/marker_and_leads_ground_truth.npz", recursive= True))
@@ -60,19 +56,19 @@ def loadhevc_frames(video_path, folder_path):
 # # loadhevc_frames(path, f_path)
 
 for i in range(len(hevc_file_paths)):
-    # video_dir_path, hevc_file = os.path.split(hevc_file_paths[i])
-    # frame_file_path = video_dir_path + "/hevc_frames/"
-    # # print(hevc_file_paths[i])
-    # # print(frame_file_path)
+    video_dir_path, hevc_file = os.path.split(hevc_file_paths[i])
+    frame_file_path = video_dir_path + "/hevc_frames/"
+    # print(hevc_file_paths[i])
+    # print(frame_file_path)
 
-    # if not os.path.exists(frame_file_path):
-    #     os.makedirs(frame_file_path)
-    # else :
-    #     pass
+    if not os.path.exists(frame_file_path):
+        os.makedirs(frame_file_path)
+    else :
+        pass
 
-    # loadhevc_frames(hevc_file_paths[i],frame_file_path)
-    # save_path_h5(gt_file_paths[i])
-    print(gt_file_paths[i])
+    loadhevc_frames(hevc_file_paths[i],frame_file_path)
+    save_path_h5(gt_file_paths[i])
+    
 
 
 
