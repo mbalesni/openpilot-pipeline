@@ -1,14 +1,10 @@
 #!/bin/bash
 
-#SBATCH --partition=gpu
 #SBATCH -J comma_train
 #SBATCH -o ./log-%j.out # STDOUT
-
-#SBATCH -t 06:59:00
+#SBATCH -t 09:59:00
 #SBATCH --ntasks=1
-#SBATCH --mem=40G
+#SBATCH --mem=20G
 #SBATCH --cpus-per-task=10
-#SBATCH --gres=gpu:tesla:1
-## #SBATCH --exclude=falcon4
 
-python Dataloader.py
+python hevc_jpg.py
