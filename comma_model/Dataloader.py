@@ -13,12 +13,6 @@ import glob
 import h5py
 from tqdm import tqdm
 
-"""
-To do : Add intial calib transformations, assertions for tensor shapes,
-        efficient strategy for inputs and outputs __getitem__ 
-
-        Enable this dataloader with variable batch size needed for desire and traffic conven.
-"""
 class CommaLoader(Dataset):
 
     def __init__(self, recordings_path ,npz_paths, split_per, data_type, transform = None, device = None, train= False, test = False):
@@ -70,9 +64,6 @@ class CommaLoader(Dataset):
                                 self.gt_file_paths.append(os.path.join(dir_path,file_name))
             print("paths loaded")
             
-            ### ---> load the frames and transform them on the fly and provide to the loader
-            ### ---> Load the .h5 files and iterate the plan data for loader. 
-            
             self.n_dirs = len(self.hevc_file_paths) 
             self.number_samples = 1190 ## 1190 sample in every dir
 
@@ -115,10 +106,10 @@ class CommaLoader(Dataset):
         stack_frames = np.zeros((1,12,128,256))
         stack_frames = (np.vstack((prepared_frames[0], prepared_frames[1]))).reshape(1,12,128,256)
         # print(stack_frames.shape)
-
-        h5_gt_data = h5py.File(h5_file_fullpath, 'r') ## file read object/ remember to close it
-        gt_plan = h5_gt_data['plans'][sample_index]
-
+        
+        with h5py.File(h5_file_fullpath, 'r') as h5gt_data:
+            gt_plan = h5gt_data['plans'][sample_index]
+    
         return stack_frames, gt_plan 
 
     def __len__(self):
