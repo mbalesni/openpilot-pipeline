@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 class CommaLoader(Dataset):
 
-    def __init__(self, recordings_path ,npz_paths, split_per, data_type, transform = None, device = None, train= False, test = False):
+    def __init__(self, recordings_path ,npz_paths, split_per, data_type, device = None, train= False, val = False):
         super(CommaLoader, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -30,10 +30,9 @@ class CommaLoader(Dataset):
         self.recordings_path = recordings_path
         self.data_type = data_type
         self.npz_paths = npz_paths 
-        self.transform = transform
         self.device = device 
         self.train = train
-        self.test = test
+        self.val = val
         self.split_per = split_per
 
         if self.npz_paths is None:
@@ -63,24 +62,39 @@ class CommaLoader(Dataset):
                                 self.hevc_file_paths.append(os.path.join(dir_path,file))
                                 self.gt_file_paths.append(os.path.join(dir_path,file_name))
             print("paths loaded")
-            
-            self.n_dirs = len(self.hevc_file_paths) 
-            self.number_samples = 1190 ## 1190 sample in every dir
 
-    def split_data(self, input_data):
+    def split_data(self):
         
-        numberofsamples = input_data['imgs'][0].shape
-        length_data = numberofsamples[0]
-        self.split_index = int(np.round(length_data) * self.split_per)
-        
-        if self.train:
-            len_for_loader = self.split_index 
-            return len_for_loader   
-        
-        elif self.test:
-            len_for_loader = length_data - self.split_index
-            return len_for_loader
-    
+        if self.data_type == "dummy":
+            numberofsamples = self.input['imgs'][0].shape
+            length_data = numberofsamples[0]
+            self.split_index = int(np.round(length_data * self.split_per))
+            
+            if self.train:
+                len_for_loader = self.split_index 
+                return len_for_loader   
+            
+            elif self.val:
+                len_for_loader = length_data - self.split_index
+                return len_for_loader
+
+        if self.data_type == "gen_gt":
+            
+            n_dirs = len(self.hevc_file_paths) 
+            number_samples = 1190 ## 1190 sample in every dir
+            self.split_index = int(np.round(n_dirs * self.split_per))         
+            
+            if self.train:
+                self.gt_files = self.gt_file_paths[:self.split_index]
+                self.hevc_files = self.hevc_file_paths[:self.split_index]  
+                return self.split_index * number_samples
+            
+            if self.val:
+                val_len = n_dirs - self.split_index
+                self.gt_files  =  self.gt_file_paths[self.split_index:]
+                self.hevc_files = self.hevc_file_paths[self.split_index:]
+                return val_len * number_samples
+
     def populate_data(self, hevc_file_paths, dir_index, sample_index):
     
         path, file =os.path.split(hevc_file_paths[dir_index])
@@ -115,12 +129,12 @@ class CommaLoader(Dataset):
     def __len__(self):
 
         if self.data_type =="dummy":
-            sample_length = self.split_data(self.input)
+            sample_length = self.split_data()
             return sample_length
         
         elif self.data_type == "gen_gt":
-            return self.n_dirs * self.number_samples 
-
+            sample_length = self.split_data()
+            return sample_length
 
     def __getitem__(self, index):
         
@@ -157,49 +171,20 @@ class CommaLoader(Dataset):
             dir_index = index // 1190
             sample_index = index % 1190
 
-            datayuv, data_gt = self.populate_data(self.hevc_file_paths, dir_index, sample_index)
+            datayuv, data_gt = self.populate_data(self.hevc_files, dir_index, sample_index)
             datayuv = torch.from_numpy(datayuv).float.to(self.device)
             data_gt = torch.from_numpy(data_gt).float.to(self.device)
 
             return datayuv, data_gt
-# if __name__ == "__main__":
 
-#     numpy_paths = ["inputdata.npz","gtdata.npz"]
-#     devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if __name__ == "__main__":
+    comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
 
-#     comma_data = CommaLoader(numpy_paths,0.8, dummy_test= True, train= True)
-#     comma_loader = DataLoader(comma_data, batch_size=2)
+    numpy_paths = ["inputdata.npz","gtdata.npz"]
+    devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-#     for i, j in comma_loader:
-#         print(j[9].shape)
+    comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt", train= True)
+    comma_loader = DataLoader(comma_data, batch_size=2)
 
-# comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
-
-# gt_files_exist_path = sorted(glob.glob(comma_recordings_path + "/**/marker_and_leads_ground_truth.npz", recursive= True))
-
-# hevc_file_paths = []
-# gt_file_paths = []
-
-# print("loading the respective paths")
-# for paths in tqdm(gt_files_exist_path):
-#     dir_path, file_name = os.path.split(paths)
-#     check_data = np.load(paths)
-#     if check_data['plans'].shape[0] == 1190 or check_data['plans'].shape[0] > 1190: ## adding only those files who has more than 1190 samples
-#         # print(check_data['plans'].shape[0]
-#         if any(fname.endswith('.hevc') for fname in os.listdir(dir_path)):
-#             for file in os.listdir(dir_path):
-#                 if file == "fcamera.hevc" or file == "video.hevc":
-#                     hevc_file_paths.append(os.path.join(dir_path,file))
-#                     gt_file_paths.append(os.path.join(dir_path,file_name))
-# print("paths loaded")
-
-# def load_frames(frames_path):
-#     yuv_frames = []
-#     files_list = os.listdir(frames_path)
-#     files_list = sorted(files_list, key=lambda x: int(os.path.splitext(x)[0]))
-#     for files in files_list:
-#         # print(os.path.join(frames_path, files))
-#         frame = cv2.imread(os.path.join(frames_path, files))
-#         yuv_frames.append(bgr_to_yuv(frame))
-    
-#     return yuv_frames
+    # for i, j in comma_loader:
+    #     print(j[9].shape)
