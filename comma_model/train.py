@@ -30,20 +30,21 @@ print("seed={}".format(seed))
 
 # CLI parser 
 parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
-# parser.add_argument("--datadir", type=str, default = "", choices=["dummy", "gen_gt"], help= "directory in which the dummy data or generated gt lies" )
+parser.add_argument("--datatype", type=str, default = "", choices=["dummy", "gen_gt"], help= "directory in which the dummy data or generated gt lies" )
 # parser.add_argument("--num_gpu", type=int, default =1, help= "number of gpus")
 parser.add_argument("--train", type =str, default="train", choices = ["train", "test"])
-# parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
-# parser.add_argument("--losstype", type= str, default= "KL_div", help= "choose between Kl and NNL loss")
+parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
 parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["scratch", "onnx"], help = "choose type of model for train")
 
 args = parser.parse_args()
 # print(args.modeltype)
 
 #Hyperparams
-name = "Dummy_comma_pipeline_nov26"
+name = "gen_gt_comma_pipeline_nov26"
+path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
+n_workers = 2
 lr = (1e-4, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
 diff_lr = False
 l2_lambda = (1e-4,1e-4,1e-4) 
@@ -54,7 +55,7 @@ lrs_thresh = 1e-4
 lrs_min = 1e-6
 
 epochs = 20 
-batch_size = 2
+batch_size = args.batch_size
 split_per = 0.8
 
 ### Load data and split in test and train
@@ -65,7 +66,14 @@ if "Dummy" or "dummy" in name:
     
     comma_data_test = CommaLoader(path_npz_dummy,split_per, dummy_test= True, test=True)
     test_loader = DataLoader(comma_data_test, batch_size=batch_size, shuffle=True)
-    
+
+elif "onnx" or "Onnx" in name:
+    comma_data_train = CommaLoader(path_comma_recordings, numpy_paths, 0.8, args.datatype, train= True)
+    train_loader = DataLoader(comma_data_train, batch_size = batch_size, shuffle= True, num_workers=n_workers)
+
+    comma_data_val = CommaLoader(path_comma_recordings, numpy_paths, 0.8, args.datatype, val= True)
+    val_loader = DataLoader(comma_data_val, batch_size=  batch_size, shuffle= False, num_workers=n_workers)
+
 ##Load model 
 """
 Both the model from scratch and the onnx-pytorch model can be used 
@@ -158,9 +166,14 @@ sftmax = nn.Softmax(dim=0)
         9. If multi-hypothesis exists it will be there for all the rest of the outputs with probabilities along with the output
             like plan, lanellines, road-edges and more... 
 """
-
 # ## train loop 
-recurrent_state = torch.zeros(batch_size,512)
+
+#initializing recurrent state by zeros
+recurrent_state = torch.zeros(batch_size,512,dtype = torch.float32)
+# desure and traffic convention is also set to zero
+desire = torch.zeros(batch_size,8,dtype = torch.float32)
+traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
+
 for epoch in tqdm(range(epochs)):
     
     start_point = time.time()
@@ -170,37 +183,49 @@ for epoch in tqdm(range(epochs)):
     for tr_it , data in tqdm(enumerate(train_loader)):
         input, labels = data
         optimizer.zero_grad()
-        
-        #input
-        yuv_images = input[0].to(device)
-        desire = input[1].to(device)
-        traffic_convention = input[2].to(device) 
-        
-        #gt
-        plan_gt = labels[0].to(device)
-        plan_prob_gt = labels[1].to(device)
-        lane_line_gt = labels[2].to(device)
-        lane_prob_gt = labels[3].to(device)
-        road_edges_gt = labels[4].to(device) 
-        leads_gt = labels[5].to(device)
-        leads_prob_gt = labels[6].to(device)
-        lead_prob_gt = labels[7].to(device)
-        desire_gt = labels[8].to(device)
-        meta_eng_gt = labels[9].to(device)
-        meta_various_gt = labels[10].to(device)
-        meta_blinkers_gt = labels[11].to(device)
-        meta_desire_gt = labels[12].to(device)
-        pose_gt = labels[13].to(device)
-        desire = torch.squeeze(desire,dim =1)
-        traffic_convention = torch.squeeze(traffic_convention, dim = 1)
+
+        if args.datatype == "dummy" and args.modeltype == "scratch":        
+            #input
+            yuv_images = input[0].to(device)
+            desire = input[1].to(device)
+            traffic_convention = input[2].to(device) 
+            
+            #gt
+            plan_gt = labels[0].to(device)
+            plan_prob_gt = labels[1].to(device)
+            lane_line_gt = labels[2].to(device)
+            lane_prob_gt = labels[3].to(device)
+            road_edges_gt = labels[4].to(device) 
+            leads_gt = labels[5].to(device)
+            leads_prob_gt = labels[6].to(device)
+            lead_prob_gt = labels[7].to(device)
+            desire_gt = labels[8].to(device)
+            meta_eng_gt = labels[9].to(device)
+            meta_various_gt = labels[10].to(device)
+            meta_blinkers_gt = labels[11].to(device)
+            meta_desire_gt = labels[12].to(device)
+            pose_gt = labels[13].to(device)
+            desire = torch.squeeze(desire,dim =1)
+            traffic_convention = torch.squeeze(traffic_convention, dim = 1)
     
-        output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
-        plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
+            output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
+            plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
         
-        recurrent_state = output2 ## Feed back the recurrent state
+            recurrent_state = output2 ## Feed back the recurrent state
         
+        elif args.datatype == "gen_gt" and args.modeltype == "onnx":
+            
+            inputs_to_pretained_model = {"input_imgs":input,
+                                        "desire": desire,
+                                        "traffic_convention":traffic_convention,
+                                        "initial_state": recurrent_state}
+            
+            outputs = comma_model(**inputs_to_pretained_model)
+            # print(outputs.shape)
+            plan_pred = outputs[:,:4955]
+             
         ## path plan
-        path_dict = {}
+        path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
         path_plans =  plan_pred
         path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
         path_dict["path_prob"] = []
@@ -357,14 +382,22 @@ for epoch in tqdm(range(epochs)):
         pose_loss = torch.distributions.kl.kl_divergence(pose_pred_dist_obj, pose_gt_dist_obj)
         pose_loss = pose_loss.sum(dim=1).mean(dim=0)
 
+        if args.datatype == "dummy" and args.modeltype == "scratch":
         ## task loss balancing strategy: used--> most naive
-        Combined_loss= (path_plan_loss + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
+            Combined_loss= (path_plan_loss + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
+            Combined_loss.backward()
+            optimizer.step()
+        
+        elif args.datatype =="gen_gt" and args.model.type == "onnx":
+            Combined_loss = path_plan_loss
+            Combined_loss.backward()
+            optimizer.step()
 
+        #### write the scripts to visualise losses in print statement and weigths and biases.     
         # print(tr_it)
         # if args.mode == "train":
 
         ## backprop 
-        Combined_loss.backward()
-        optimizer.step()
+       
         
 

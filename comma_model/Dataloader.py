@@ -46,6 +46,8 @@ class CommaLoader(Dataset):
             self.gt = np.load(self.npz_paths[1])
 
         elif self.data_type == "gen_gt":
+
+            ## I can make this loop faster somewhat If i have all the converted data on the disk ## check only .plan files and look for 1190 size
             gt_files_exist_path = sorted(glob.glob(self.recordings_path + "/**/marker_and_leads_ground_truth.npz", recursive= True))
 
             self.hevc_file_paths = []
@@ -78,7 +80,7 @@ class CommaLoader(Dataset):
                 len_for_loader = length_data - self.split_index
                 return len_for_loader
 
-        if self.data_type == "gen_gt":
+        elif self.data_type == "gen_gt":
             
             n_dirs = len(self.hevc_file_paths) 
             number_samples = 1190 ## 1190 sample in every dir
@@ -89,7 +91,7 @@ class CommaLoader(Dataset):
                 self.hevc_files = self.hevc_file_paths[:self.split_index]  
                 return self.split_index * number_samples
             
-            if self.val:
+            elif self.val:
                 val_len = n_dirs - self.split_index
                 self.gt_files  =  self.gt_file_paths[self.split_index:]
                 self.hevc_files = self.hevc_file_paths[self.split_index:]
@@ -172,8 +174,8 @@ class CommaLoader(Dataset):
             sample_index = index % 1190
 
             datayuv, data_gt = self.populate_data(self.hevc_files, dir_index, sample_index)
-            datayuv = torch.from_numpy(datayuv).float.to(self.device)
-            data_gt = torch.from_numpy(data_gt).float.to(self.device)
+            datayuv = torch.from_numpy(datayuv).float().to(self.device)
+            data_gt = torch.from_numpy(data_gt).float().to(self.device)
 
             return datayuv, data_gt
 
@@ -185,6 +187,3 @@ if __name__ == "__main__":
 
     comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt", train= True)
     comma_loader = DataLoader(comma_data, batch_size=2)
-
-    # for i, j in comma_loader:
-    #     print(j[9].shape)
