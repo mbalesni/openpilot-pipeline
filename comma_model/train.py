@@ -147,9 +147,6 @@ else:
     scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)
-criterion1 = nn.KLDivLoss()
-criterion2 = nn.CrossEntropyLoss()
-sftmax = nn.Softmax(dim=0)
 
 """"
         How to approach this situation :::
@@ -223,6 +220,7 @@ for epoch in tqdm(range(epochs)):
             outputs = comma_model(**inputs_to_pretained_model)
             # print(outputs.shape)
             plan_pred = outputs[:,:4955]
+            recurrent_state = outputs[:,5960:] ## important to refeed state of GRU
              
         ## path plan
         path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
