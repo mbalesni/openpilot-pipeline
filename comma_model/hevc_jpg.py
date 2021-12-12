@@ -5,7 +5,7 @@ import glob
 import numpy as np
 from tqdm import tqdm 
 
-
+import subprocess
 comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
 
 gt_files_exist_path = sorted(glob.glob(comma_recordings_path + "/**/marker_and_leads_ground_truth.npz", recursive= True))
@@ -28,14 +28,15 @@ print("paths loaded")
 print(len(hevc_file_paths))
 print(len(gt_file_paths))
 
-path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/fcamera.hevc"
-f_path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/frames_hevc/"
+# path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/fcamera.hevc"
+# f_path = "/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/frames_hevc/"
 
 # save_path_h5("/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-05-26--08-50-16/0/marker_and_leads_ground_truth.npz")
 
-single_job_file_path = os.path.join(os.getcwd(),"single_job.sh" )
+
+single_job_file_path = os.path.join("/gpfs/space/home/gautamku/openpilot-pipeline/comma_model","single_job.sh" )
 print("job file path:",single_job_file_path)
 
 for i in range(len(hevc_file_paths)):
-    os.system("sbatch %s %s %s" %(single_job_file_path, hevc_file_paths[i], gt_file_paths[i]))
-
+    os.system("sbatch %s %s" %(single_job_file_path, hevc_file_paths[i]))
+# os.system("sbatch %s %s" %(single_job_file_path,"/gpfs/space/projects/Bolt/comma_recordings/realdata/2020-08-28--12-59-49--25/fcamera.hevc"))

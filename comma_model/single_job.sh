@@ -7,6 +7,7 @@
 #SBATCH --mem=10G
 #SBATCH --cpus-per-task=2
 
+path=$1
+echo $path
 echo "this script will launch create_files.py with every dir path that i want to edit"
-python create_files.py $1 $2
-
+python create_files.py $path

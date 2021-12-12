@@ -40,7 +40,8 @@ args = parser.parse_args()
 # print(args.modeltype)
 
 #Hyperparams
-name = "gen_gt_comma_pipeline_nov26"
+date_it  = "12dec"
+name = "gen_gt_comma_pipeline_" + date_it
 path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
@@ -55,6 +56,7 @@ lrs_thresh = 1e-4
 lrs_min = 1e-6
 
 epochs = 20 
+check_val_epoch =2 
 batch_size = args.batch_size
 split_per = 0.8
 
@@ -174,7 +176,7 @@ traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
 for epoch in tqdm(range(epochs)):
     
     start_point = time.time()
-    tr_loss = np.array(0.0)
+    tr_loss = 0.0
     run_loss = 0.0
 
     for tr_it , data in tqdm(enumerate(train_loader)):
@@ -217,69 +219,71 @@ for epoch in tqdm(range(epochs)):
                                         "traffic_convention":traffic_convention,
                                         "initial_state": recurrent_state}
             
-            outputs = comma_model(**inputs_to_pretained_model)
+            outputs = comma_model(**inputs_to_pretained_model) ## can cause issue if not delete comment
             # print(outputs.shape)
-            plan_pred = outputs[:,:4955]
+            plan_predictions = outputs[:,:4955]
             recurrent_state = outputs[:,5960:] ## important to refeed state of GRU
-             
-        ## path plan
-        path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
-        path_plans =  plan_pred
-        path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
-        path_dict["path_prob"] = []
-        path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
-        path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
-                        path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
-        #naive path_loss---> train all the paths together
-
-        path1_gt = plan_gt[:,0,:,:,:] 
-        path2_gt = plan_gt[:,1,:,:,:]
-        path3_gt = plan_gt[:,2,:,:,:]
-        path4_gt = plan_gt[:,3,:,:,:]
-        path5_gt =plan_gt[:,4,:,:,:]
         
-        def mean_std(array):
-            mean = array[:,0,:,:]
-            std = array[:,1,:,:]
-            return mean, std
+        def cal_path_loss(plan_pred, plan_gt, plan_prob_gt, batch_size ):
+            ## path plan
+            path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
+            path_plans =  plan_pred
+            path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+            path_dict["path_prob"] = []
+            path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
+            path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
+            path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
+            path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
+            path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
+            path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
+                            path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
+            #naive path_loss---> train all the paths together
 
-        mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
-        mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
+            path1_gt = plan_gt[:,0,:,:,:] 
+            path2_gt = plan_gt[:,1,:,:,:]
+            path3_gt = plan_gt[:,2,:,:,:]
+            path4_gt = plan_gt[:,3,:,:,:]
+            path5_gt =plan_gt[:,4,:,:,:]
+            
+            def mean_std(array):
+                mean = array[:,0,:,:]
+                std = array[:,1,:,:]
+                return mean, std
 
-        mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
-        mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
+            mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
+            mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
 
-        mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
-        mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
+            mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
+            mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
+
+            mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
+            mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
+            
+            mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
+            mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
+
+            mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
+            mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
+            
+            
+            def calcualte_path_loss(mean1, mean2, std1, std2):
+                d1 = torch.distributions.normal.Normal(mean1, std1)
+                d2 = torch.distributions.normal.Normal(mean2, std2)
+                loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
+                return loss
+
+            path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
+            path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
+            path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
+            path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
+            path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
+
+            path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
+            path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
+            path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
         
-        mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
-        mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
-
-        mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
-        mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
-        
-        
-        def calcualte_path_loss(mean1, mean2, std1, std2):
-            d1 = torch.distributions.normal.Normal(mean1, std1)
-            d2 = torch.distributions.normal.Normal(mean2, std2)
-            loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
-            return loss
-
-        path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
-        path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
-        path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
-        path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
-        path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
-
-        path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
-        path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
-        path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
-    
-        path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
+            path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
+            return path_plan_loss
 
         ## lanelines
         lane_pred = lane_pred.reshape(batch_size, 4,2,33,2)
@@ -382,20 +386,60 @@ for epoch in tqdm(range(epochs)):
 
         if args.datatype == "dummy" and args.modeltype == "scratch":
         ## task loss balancing strategy: used--> most naive
-            Combined_loss= (path_plan_loss + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
+            Combined_loss= (cal_path_loss() + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
             Combined_loss.backward()
             optimizer.step()
         
         elif args.datatype =="gen_gt" and args.model.type == "onnx":
-            Combined_loss = path_plan_loss
+            Combined_loss = cal_path_loss(plan_predictions, labels[0], labels[1], batch_size)
             Combined_loss.backward()
+
+            loss_cpu = Combined_loss.detach().clone.cpu().item()
+            tr_loss += loss_cpu
+            run_loss += loss_cpu
             optimizer.step()
 
-        #### write the scripts to visualise losses in print statement and weigths and biases.     
-        # print(tr_it)
-        # if args.mode == "train":
+            if (tr_it+1)%10 == 0:
+                print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
+                if (tr_it+1) %100 == 0:
+                    ### plot the loss and optimizer lr wrt time in weights and biases
+                    #st_pt = time.time()
+                    scheduler.step(run_loss/100)
+                    run_loss =0.0
+                
+            del Combined_loss, outputs
 
-        ## backprop 
-       
-        
+        ## validation loop    
+            if (epoch +1) %check_val_epoch ==0:
+                val_st_pt = time.time()
+                val_loss_cpu = 0.0
+                checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
+                torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
+                print(">>>>>validating<<<<<<<")
 
+                for val_itr, val_data in enumerate(val_loader):
+                    val_input,val_labels = val_data
+                    val_inputs_to_pretained_model = {"input_imgs":val_input,
+                                            "desire": desire,
+                                            "traffic_convention":traffic_convention,
+                                            "initial_state": recurrent_state}
+                
+                    val_outputs = comma_model(**val_inputs_to_pretained_model)
+
+                    val_path_prediction = val_outputs[:,:4955]
+                    val_loss = cal_path_loss(val_path_prediction,val_labels[0], val_labels[1], batch_size)
+                    val_loss_cpu += val_loss.deatch().clone().cpu().item()
+
+                    if (val_itr+1)%10 == 0:
+                        print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+
+                print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
+
+                    
+                del val_loss, val_outputs
+
+    print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}")
+
+PATH = "./nets/model_itr/" +name + ".pth" 
+torch.save(comma_model.state_dict(), PATH)
+print( "Saved trained model" )
