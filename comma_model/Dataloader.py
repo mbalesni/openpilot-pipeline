@@ -123,10 +123,15 @@ class CommaLoader(Dataset):
         stack_frames = (np.vstack((prepared_frames[0], prepared_frames[1]))).reshape(1,12,128,256)
         # print(stack_frames.shape)
         
-        with h5py.File(h5_file_fullpath, 'r') as h5gt_data:
-            gt_plan = h5gt_data['plans'][sample_index]
-    
-        return stack_frames, gt_plan 
+        h5gt_data = h5py.File(h5_file_fullpath, 'r') 
+        gt_plan = h5gt_data['plans'][sample_index]
+        gt_plan_prob = h5gt_data['plans_prob'][sample_index]
+
+        gt_plan = np.array(gt_plan)
+        gt_plan_prob = np.array(gt_plan_prob)
+        h5gt_data.close()
+
+        return stack_frames, gt_plan, gt_plan_prob 
 
     def __len__(self):
 
@@ -173,11 +178,11 @@ class CommaLoader(Dataset):
             dir_index = index // 1190
             sample_index = index % 1190
 
-            datayuv, data_gt = self.populate_data(self.hevc_files, dir_index, sample_index)
+            datayuv, data_gt, data_gt_prob = self.populate_data(self.hevc_files, dir_index, sample_index)
             datayuv = torch.from_numpy(datayuv).float().to(self.device)
             data_gt = torch.from_numpy(data_gt).float().to(self.device)
-
-            return datayuv, data_gt
+            data_gt_prob = torch.from_numpy(data_gt_prob).float().to(self.device)
+            return datayuv, (data_gt, data_gt_prob)
 
 if __name__ == "__main__":
     comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
@@ -187,3 +192,9 @@ if __name__ == "__main__":
 
     comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt", train= True)
     comma_loader = DataLoader(comma_data, batch_size=2)
+
+    for i, j in comma_loader:
+        yuv, data = j
+        print(yuv.shape)
+        print(data[0].shape)
+        print(data[1].shape)

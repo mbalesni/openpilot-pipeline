@@ -17,8 +17,12 @@ def save_path_h5(file_path):
     path, file = os.path.split(file_path)
     data = np.load(file_path)
     path_data = data["plans"][:1190,:,:,:,:] ## clipping the data until 1190 dimensions only
+    path_data_prob = data["plans_prob"][:1190,:,:]
+    
+    ## adding path plan and plan prob gt_data into .h5 file to make it iterable
     h5file_object  = h5py.File(path+ "/plan.h5",'w')
-    h5file_object.create_dataset("plans",data = path_data) 
+    h5file_object.create_dataset("plans",data = path_data)
+    h5file_object.create_dataset("plans_prob", data = path_data_prob) 
     h5file_object.close()
 
 # load .hevc file and save the frames in the same path
