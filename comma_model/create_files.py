@@ -1,4 +1,3 @@
-
 import cv2
 from sys import argv
 import os

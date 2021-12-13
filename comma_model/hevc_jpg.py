@@ -38,5 +38,9 @@ single_job_file_path = os.path.join("/gpfs/space/home/gautamku/openpilot-pipelin
 print("job file path:",single_job_file_path)
 
 for i in range(len(hevc_file_paths)):
-    os.system("sbatch %s %s" %(single_job_file_path, hevc_file_paths[i]))
-# os.system("sbatch %s %s" %(single_job_file_path,"/gpfs/space/projects/Bolt/comma_recordings/realdata/2020-08-28--12-59-49--25/fcamera.hevc"))
+    if "|" in hevc_file_paths[i]:
+        path = hevc_file_paths[i].replace("|", "\|")
+    else: 
+        path = hevc_file_paths[i]
+    os.system("sbatch %s %s" %(single_job_file_path, path))
+# os.system("sbatch %s %s" %(single_job_file_path,"/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b\|2018-07-27--06-03-57/10/video.hevc"))

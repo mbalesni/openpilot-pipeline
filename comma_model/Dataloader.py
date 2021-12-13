@@ -3,7 +3,8 @@ from operator import gt
 import numpy as np 
 from numpy import load
 import torch 
-import os 
+import os
+from torch._C import device 
 from torch.utils.data import DataLoader , Dataset
 from torchvision import transforms
 import sys 
@@ -61,8 +62,20 @@ class CommaLoader(Dataset):
                     if any(fname.endswith('.hevc') for fname in os.listdir(dir_path)):
                         for file in os.listdir(dir_path):
                             if file == "fcamera.hevc" or file == "video.hevc":
+                                ### in case there are path issues
+                                # video_file_p = os.path.join(dir_path,file)
+                                # gt_file_p = os.path.join(dir_path,file_name)
+                                # if "|" in video_file_p and "|" in gt_file_p: ## needed when to run with sbatch
+                                #     video_file_p = video_file_p.replace("|", "\|")
+                                #     gt_file_p = gt_file_p.replace("|", "\|")
+                                # else: 
+                                #     video_file_p = video_file_p
+                                #     gt_file_p = gt_file_p  
+                                # self.hevc_file_paths.append(video_file_p)
+                                # self.gt_file_paths.append(gt_file_p)
                                 self.hevc_file_paths.append(os.path.join(dir_path,file))
                                 self.gt_file_paths.append(os.path.join(dir_path,file_name))
+
             print("paths loaded")
 
     def split_data(self):
@@ -190,9 +203,10 @@ if __name__ == "__main__":
     numpy_paths = ["inputdata.npz","gtdata.npz"]
     devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt", train= True)
-    comma_loader = DataLoader(comma_data, batch_size=2)
-
+    comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt",device = devices, train= True)
+    comma_loader = DataLoader(comma_data, batch_size=2, num_workers=10 )
+    
+    print("checking the sahpes of the loader outs")
     for i, j in comma_loader:
         yuv, data = j
         print(yuv.shape)
