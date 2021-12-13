@@ -13,6 +13,7 @@ from Dataloader import *
 from model import *
 from onnx2pytorch import ConvertModel
 import onnx
+import wandb
 
 cuda = torch.cuda.is_available()
 if cuda:
@@ -38,6 +39,28 @@ parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["s
 
 args = parser.parse_args()
 # print(args.modeltype)
+green = [0, 153, 51]
+red = [0,0,204]
+
+class Logger:
+    
+    def __init__( self, prefix ):
+        self.cur_ep = 0
+        self.prefix = prefix
+        
+    def plot( self, loss, loss_pim, time, epoch=-1 ):
+        if epoch == -1:
+            self.cur_ep += 1
+        else: self.cur_ep = epoch
+        wandb.log( {"{}_Loss".format( self.prefix ): loss,
+                    "{}_Time".format( self.prefix ): time,
+                    "{}_Loss Im1".format( self.prefix ): loss_pim[0],
+                    "{}_Loss Im2".format( self.prefix ): loss_pim[1],
+                    "{}_Loss Im3".format( self.prefix ): loss_pim[2]},
+                   step=self.cur_ep )
+
+## intializing the object of the logger class 
+tr_logger = Logger("train")
 
 #Hyperparams
 date_it  = "12dec"
@@ -173,6 +196,16 @@ recurrent_state = torch.zeros(batch_size,512,dtype = torch.float32)
 desire = torch.zeros(batch_size,8,dtype = torch.float32)
 traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
 
+
+run = wandb.init(project="test-project", entity="openpilot_project")
+
+
+# with run:
+#     wandb.config.lr = lr
+#     wandb.config.l2 = l2_lambda
+#     wandb.config.lrs = str(scheduler)
+#     wandb.config.seed = seed   
+
 for epoch in tqdm(range(epochs)):
     
     start_point = time.time()
@@ -219,14 +252,14 @@ for epoch in tqdm(range(epochs)):
                                         "traffic_convention":traffic_convention,
                                         "initial_state": recurrent_state}
             
-            outputs = comma_model(**inputs_to_pretained_model) ## can cause issue if not delete comment
+            outputs = comma_model(**inputs_to_pretained_model) 
             # print(outputs.shape)
             plan_predictions = outputs[:,:4955]
             recurrent_state = outputs[:,5960:] ## important to refeed state of GRU
         
         def cal_path_loss(plan_pred, plan_gt, plan_prob_gt, batch_size ):
             ## path plan
-            path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
+            path_dict = {} 
             path_plans =  plan_pred
             path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
             path_dict["path_prob"] = []
@@ -443,3 +476,6 @@ for epoch in tqdm(range(epochs)):
 PATH = "./nets/model_itr/" +name + ".pth" 
 torch.save(comma_model.state_dict(), PATH)
 print( "Saved trained model" )
+
+
+
