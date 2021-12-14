@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 class CommaLoader(Dataset):
 
-    def __init__(self, recordings_path ,npz_paths, split_per, data_type, device, train= False, val = False):
+    def __init__(self, recordings_path ,npz_paths, split_per, data_type, train= False, val = False):
         super(CommaLoader, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -31,7 +31,6 @@ class CommaLoader(Dataset):
         self.recordings_path = recordings_path
         self.data_type = data_type
         self.npz_paths = npz_paths 
-        self.device = device
         self.train = train
         self.val = val
         self.split_per = split_per
@@ -139,27 +138,27 @@ class CommaLoader(Dataset):
         
         if self.data_type == "dummy" and self.train:
             
-            imgs = torch.from_numpy(self.input['imgs'][0][index]).float().to(self.device)
-            desire = torch.from_numpy(self.input['desire'][0][index]).float().to(self.device)
-            traffic_conv = torch.from_numpy(self.input['traff_conv'][0][index]).float().to(self.device)
+            imgs = torch.from_numpy(self.input['imgs'][0][index]).float()
+            desire = torch.from_numpy(self.input['desire'][0][index]).float()
+            traffic_conv = torch.from_numpy(self.input['traff_conv'][0][index]).float()
             
             #need only during intialisation
-            recurrent_state = torch.from_numpy(self.input['recurrent_state'][0][index]).float().to(self.device)
+            recurrent_state = torch.from_numpy(self.input['recurrent_state'][0][index]).float()
             
-            plan = torch.from_numpy(self.gt['plan'][0][index]).float().to(self.device)
-            plan_prob = torch.from_numpy(self.gt['plan_prob'][0][index]).float().to(self.device)
-            ll = torch.from_numpy(self.gt['ll'][0][index]).float().to(self.device)
-            ll_prob = torch.from_numpy(self.gt['ll_prob'][0][index]).float().to(self.device)
-            road_edges = torch.from_numpy(self.gt['road_edges'][0][index]).float().to(self.device)
-            leads = torch.from_numpy(self.gt['leads'][0][index]).float().to(self.device)
-            leads_prob = torch.from_numpy(self.gt['leads_prob'][0][index]).float().to(self.device)
-            lead_prob = torch.from_numpy(self.gt['lead_prob'][0][index]).float().to(self.device)
-            desire_gt = torch.from_numpy(self.gt['desire'][0][index]).float().to(self.device)
-            meta_eng = torch.from_numpy(self.gt['meta_eng'][0][index]).float().to(self.device)
-            meta_various = torch.from_numpy(self.gt['meta_various'][0][index]).float().to(self.device)
-            meta_blinkers = torch.from_numpy(self.gt['meta_blinkers'][0][index]).float().to(self.device)
-            meta_desire = torch.from_numpy(self.gt['meta_desire'][0][index]).float().to(self.device)
-            pose = torch.from_numpy(self.gt['pose'][0][index]).float().to(self.device)
+            plan = torch.from_numpy(self.gt['plan'][0][index]).float()
+            plan_prob = torch.from_numpy(self.gt['plan_prob'][0][index]).float()
+            ll = torch.from_numpy(self.gt['ll'][0][index]).float()
+            ll_prob = torch.from_numpy(self.gt['ll_prob'][0][index]).float()
+            road_edges = torch.from_numpy(self.gt['road_edges'][0][index]).float()
+            leads = torch.from_numpy(self.gt['leads'][0][index]).float()
+            leads_prob = torch.from_numpy(self.gt['leads_prob'][0][index]).float()
+            lead_prob = torch.from_numpy(self.gt['lead_prob'][0][index]).float()
+            desire_gt = torch.from_numpy(self.gt['desire'][0][index]).float()
+            meta_eng = torch.from_numpy(self.gt['meta_eng'][0][index]).float()
+            meta_various = torch.from_numpy(self.gt['meta_various'][0][index]).float()
+            meta_blinkers = torch.from_numpy(self.gt['meta_blinkers'][0][index]).float()
+            meta_desire = torch.from_numpy(self.gt['meta_desire'][0][index]).float()
+            pose = torch.from_numpy(self.gt['pose'][0][index]).float()
 
             return (imgs, desire, traffic_conv, recurrent_state), (plan, plan_prob,
             ll, ll_prob, road_edges, leads, leads_prob, lead_prob, desire_gt, meta_eng, meta_various, meta_blinkers,

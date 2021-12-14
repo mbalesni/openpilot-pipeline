@@ -60,12 +60,12 @@ tr_logger = Logger("train")
 
 print("=>intializing hyperparams")
 #Hyperparams
-date_it  = "_12dec"
+date_it  = "_14dec"
 name = "onnx_gen_gt_comma_pipeline_" + date_it
 path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
-n_workers = 0
+n_workers = 1
 lr = (1e-4, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
 diff_lr = False
 l2_lambda = (1e-4,1e-4,1e-4) 
@@ -75,7 +75,7 @@ lrs_cd = 50
 lrs_thresh = 1e-4
 lrs_min = 1e-6
 
-epochs = 20 
+epochs = 5
 check_val_epoch =2 
 batch_size = args.batch_size
 split_per = 0.8
@@ -419,10 +419,11 @@ for epoch in tqdm(range(epochs)):
         pose_loss = pose_loss.sum(dim=1).mean(dim=0)
 
         if args.datatype == "dummy" and args.modeltype == "scratch":
-        ## task loss balancing strategy: used--> most naive
-            Combined_loss= (cal_path_loss() + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
-            Combined_loss.backward()
-            optimizer.step()
+        # ## task loss balancing strategy: used--> most naive
+        #     Combined_loss= (cal_path_loss() + lane_loss + lane_prob_loss + road_edges_loss + Leads_loss + lead_prob_loss + desire_loss + meta1loss + meta_desire_loss + pose_loss).to(device)
+        #     Combined_loss.backward()
+        #     optimizer.step()
+            print("not using currently")
         
         elif args.datatype =="gen_gt" and args.modeltype == "onnx":
             Combined_loss = cal_path_loss(plan_predictions, labels[0], labels[1], batch_size)
