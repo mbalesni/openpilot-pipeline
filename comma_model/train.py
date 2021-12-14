@@ -27,20 +27,17 @@ print("=> using '{}' for computation.".format(device))
 #for reproducibility 
 seed = np.random.randint(2**16)
 torch.manual_seed(seed)
-print("seed={}".format(seed))
+print("=>seed={}".format(seed))
 
+print("=>intializing CLI args")
 # CLI parser 
 parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
 parser.add_argument("--datatype", type=str, default = "", choices=["dummy", "gen_gt"], help= "directory in which the dummy data or generated gt lies" )
 # parser.add_argument("--num_gpu", type=int, default =1, help= "number of gpus")
-parser.add_argument("--train", type =str, default="train", choices = ["train", "test"])
+parser.add_argument("--phase", type =str, default="train", choices = ["train", "test"])
 parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
 parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["scratch", "onnx"], help = "choose type of model for train")
-
 args = parser.parse_args()
-# print(args.modeltype)
-green = [0, 153, 51]
-red = [0,0,204]
 
 class Logger:
     
@@ -48,27 +45,27 @@ class Logger:
         self.cur_ep = 0
         self.prefix = prefix
         
-    def plot( self, loss, loss_pim, time, epoch=-1 ):
+    def plotTr( self, loss, lr, time, epoch=-1 ):
         if epoch == -1:
             self.cur_ep += 1
         else: self.cur_ep = epoch
         wandb.log( {"{}_Loss".format( self.prefix ): loss,
                     "{}_Time".format( self.prefix ): time,
-                    "{}_Loss Im1".format( self.prefix ): loss_pim[0],
-                    "{}_Loss Im2".format( self.prefix ): loss_pim[1],
-                    "{}_Loss Im3".format( self.prefix ): loss_pim[2]},
-                   step=self.cur_ep )
+                    "{}_lr".format( self.prefix ): lr},
+                    step=self.cur_ep )
 
 ## intializing the object of the logger class 
+print("=>intialzing wandb Logger class")
 tr_logger = Logger("train")
 
+print("=>intializing hyperparams")
 #Hyperparams
-date_it  = "12dec"
-name = "gen_gt_comma_pipeline_" + date_it
+date_it  = "_12dec"
+name = "onnx_gen_gt_comma_pipeline_" + date_it
 path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
-n_workers = 2
+n_workers = 0
 lr = (1e-4, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
 diff_lr = False
 l2_lambda = (1e-4,1e-4,1e-4) 
@@ -84,20 +81,22 @@ batch_size = args.batch_size
 split_per = 0.8
 
 ### Load data and split in test and train
+print("=>Loading data")
+print("=>Preparing the dataloader")
 
-if "Dummy" or "dummy" in name:
-    comma_data_train = CommaLoader(path_npz_dummy,split_per, dummy_test= True, train= True)
-    train_loader = DataLoader(comma_data_train, batch_size=batch_size, shuffle=True)
+if "dummy" in name:
+    # comma_data_train = CommaLoader(path_npz_dummy,split_per, dummy_test= True, train= True)
+    # train_loader = DataLoader(comma_data_train, batch_size=batch_size, shuffle=True)
     
-    comma_data_test = CommaLoader(path_npz_dummy,split_per, dummy_test= True, test=True)
-    test_loader = DataLoader(comma_data_test, batch_size=batch_size, shuffle=True)
+    # comma_data_test = CommaLoader(path_npz_dummy,split_per, dummy_test= True, test=True)
+    # test_loader = DataLoader(comma_data_test, batch_size=batch_size, shuffle=True)
+    print("=>not using the dummy data rn")
+elif "onnx" in name:
+    comma_data_train = CommaLoader(path_comma_recordings, path_npz_dummy, 0.8, args.datatype,   train= True)
+    train_loader = DataLoader(comma_data_train, batch_size = batch_size, shuffle= False, num_workers=n_workers)
 
-elif "onnx" or "Onnx" in name:
-    comma_data_train = CommaLoader(path_comma_recordings, numpy_paths, 0.8, args.datatype, train= True)
-    train_loader = DataLoader(comma_data_train, batch_size = batch_size, shuffle= True, num_workers=n_workers)
-
-    comma_data_val = CommaLoader(path_comma_recordings, numpy_paths, 0.8, args.datatype, val= True)
-    val_loader = DataLoader(comma_data_val, batch_size=  batch_size, shuffle= False, num_workers=n_workers)
+    comma_data_val = CommaLoader(path_comma_recordings, path_npz_dummy, 0.8, args.datatype,  val= True)
+    val_loader = DataLoader(comma_data_val, batch_size =  batch_size, shuffle= False, num_workers=n_workers)
 
 ##Load model 
 """
@@ -114,6 +113,9 @@ expansion = 6
 param_scratch_model = [filters_list, expansion, inputs_dim_outputheads,
                      output_dim_outputheads ]
 pathplan_layer_names  = ["Gemm_959", "Gemm_981","Gemm_983","Gemm_1036"]
+
+print("=>Loading the model")
+print("=>model used:",args.modeltype)
 
 def load_model(params_scratch, pathplan):
 
@@ -171,8 +173,7 @@ else:
     #choice of lr_scheduler can be changed
     scheduler = topt.lr_scheduler.ReduceLROnPlateau(optimizer, factor=lrs_factor, patience=lrs_patience, 
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
-                                                 cooldown=lrs_cd)
-
+                                                 cooldown=lrs_cd)                               
 """"
         How to approach this situation :::
         1. create distribution objects and calcualte KL div. 
@@ -197,7 +198,7 @@ desire = torch.zeros(batch_size,8,dtype = torch.float32)
 traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
 
 
-run = wandb.init(project="test-project", entity="openpilot_project")
+# run = wandb.init(project="test-project", entity="openpilot_project")
 
 
 # with run:
@@ -246,7 +247,7 @@ for epoch in tqdm(range(epochs)):
             recurrent_state = output2 ## Feed back the recurrent state
         
         elif args.datatype == "gen_gt" and args.modeltype == "onnx":
-            
+            print("====> start to train" )
             inputs_to_pretained_model = {"input_imgs":input,
                                         "desire": desire,
                                         "traffic_convention":traffic_convention,
@@ -423,11 +424,11 @@ for epoch in tqdm(range(epochs)):
             Combined_loss.backward()
             optimizer.step()
         
-        elif args.datatype =="gen_gt" and args.model.type == "onnx":
+        elif args.datatype =="gen_gt" and args.modeltype == "onnx":
             Combined_loss = cal_path_loss(plan_predictions, labels[0], labels[1], batch_size)
             Combined_loss.backward()
 
-            loss_cpu = Combined_loss.detach().clone.cpu().item()
+            loss_cpu = Combined_loss.detach().clone.cpu().item() ## this is the loss for one batch in one interation
             tr_loss += loss_cpu
             run_loss += loss_cpu
             optimizer.step()
@@ -436,42 +437,44 @@ for epoch in tqdm(range(epochs)):
                 print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
                 if (tr_it+1) %100 == 0:
                     ### plot the loss and optimizer lr wrt time in weights and biases
-                    #st_pt = time.time()
+                    # tr_logger()
                     scheduler.step(run_loss/100)
                     run_loss =0.0
                 
             del Combined_loss, outputs
 
-        ## validation loop    
-            if (epoch +1) %check_val_epoch ==0:
-                val_st_pt = time.time()
-                val_loss_cpu = 0.0
-                checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
-                torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
-                print(">>>>>validating<<<<<<<")
+        ## validation loop  
+            with torch.no_grad(): ## saving memory by not accumulating activations
+                if (epoch +1) %check_val_epoch ==0:
+                    val_st_pt = time.time()
+                    val_loss_cpu = 0.0
+                    checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
+                    torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
+                    print(">>>>>validating<<<<<<<")
 
-                for val_itr, val_data in enumerate(val_loader):
-                    val_input,val_labels = val_data
-                    val_inputs_to_pretained_model = {"input_imgs":val_input,
-                                            "desire": desire,
-                                            "traffic_convention":traffic_convention,
-                                            "initial_state": recurrent_state}
-                
-                    val_outputs = comma_model(**val_inputs_to_pretained_model)
-
-                    val_path_prediction = val_outputs[:,:4955]
-                    val_loss = cal_path_loss(val_path_prediction,val_labels[0], val_labels[1], batch_size)
-                    val_loss_cpu += val_loss.deatch().clone().cpu().item()
-
-                    if (val_itr+1)%10 == 0:
-                        print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
-
-                print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
-
+                    for val_itr, val_data in enumerate(val_loader):
+                        val_input,val_labels = val_data
+                        val_inputs_to_pretained_model = {"input_imgs":val_input,
+                                                "desire": desire,
+                                                "traffic_convention":traffic_convention,
+                                                "initial_state": recurrent_state}
                     
-                del val_loss, val_outputs
+                        val_outputs = comma_model(**val_inputs_to_pretained_model)
+
+                        val_path_prediction = val_outputs[:,:4955]
+                        val_loss = cal_path_loss(val_path_prediction,val_labels[0], val_labels[1], batch_size)
+                        val_loss_cpu += val_loss.deatch().clone().cpu().item()
+
+                        if (val_itr+1)%10 == 0:
+                            print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+
+                    print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
+                    ### visualize the loss
+                        
+                    del val_loss, val_outputs
 
     print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}")
+    ## visualize the loss
 
 PATH = "./nets/model_itr/" +name + ".pth" 
 torch.save(comma_model.state_dict(), PATH)

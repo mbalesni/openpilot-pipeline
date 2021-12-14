@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 class CommaLoader(Dataset):
 
-    def __init__(self, recordings_path ,npz_paths, split_per, data_type, device = None, train= False, val = False):
+    def __init__(self, recordings_path ,npz_paths, split_per, data_type, device, train= False, val = False):
         super(CommaLoader, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -31,7 +31,7 @@ class CommaLoader(Dataset):
         self.recordings_path = recordings_path
         self.data_type = data_type
         self.npz_paths = npz_paths 
-        self.device = device 
+        self.device = device
         self.train = train
         self.val = val
         self.split_per = split_per
@@ -45,6 +45,18 @@ class CommaLoader(Dataset):
         elif self.data_type == "dummy":
             self.input = np.load(self.npz_paths[0])
             self.gt = np.load(self.npz_paths[1])
+
+            numberofsamples = self.input['imgs'][0].shape
+            length_data = numberofsamples[0]
+            self.split_index = int(np.round(length_data * self.split_per))
+            
+            if self.train:
+                len_for_loader = self.split_index 
+                self.sample_length = len_for_loader   
+            
+            elif self.val:
+                len_for_loader = length_data - self.split_index
+                self.sample_length = len_for_loader
 
         elif self.data_type == "gen_gt":
 
@@ -62,39 +74,13 @@ class CommaLoader(Dataset):
                     if any(fname.endswith('.hevc') for fname in os.listdir(dir_path)):
                         for file in os.listdir(dir_path):
                             if file == "fcamera.hevc" or file == "video.hevc":
-                                ### in case there are path issues
-                                # video_file_p = os.path.join(dir_path,file)
-                                # gt_file_p = os.path.join(dir_path,file_name)
-                                # if "|" in video_file_p and "|" in gt_file_p: ## needed when to run with sbatch
-                                #     video_file_p = video_file_p.replace("|", "\|")
-                                #     gt_file_p = gt_file_p.replace("|", "\|")
-                                # else: 
-                                #     video_file_p = video_file_p
-                                #     gt_file_p = gt_file_p  
-                                # self.hevc_file_paths.append(video_file_p)
-                                # self.gt_file_paths.append(gt_file_p)
                                 self.hevc_file_paths.append(os.path.join(dir_path,file))
                                 self.gt_file_paths.append(os.path.join(dir_path,file_name))
 
             print("paths loaded")
-
-    def split_data(self):
-        
-        if self.data_type == "dummy":
-            numberofsamples = self.input['imgs'][0].shape
-            length_data = numberofsamples[0]
-            self.split_index = int(np.round(length_data * self.split_per))
-            
-            if self.train:
-                len_for_loader = self.split_index 
-                return len_for_loader   
-            
-            elif self.val:
-                len_for_loader = length_data - self.split_index
-                return len_for_loader
-
-        elif self.data_type == "gen_gt":
-            
+            print("length of video files", len(self.hevc_file_paths))
+            print("lenght of gt files", len(self.gt_file_paths))
+            # print(self.hevc_file_paths)
             n_dirs = len(self.hevc_file_paths) 
             number_samples = 1190 ## 1190 sample in every dir
             self.split_index = int(np.round(n_dirs * self.split_per))         
@@ -102,13 +88,13 @@ class CommaLoader(Dataset):
             if self.train:
                 self.gt_files = self.gt_file_paths[:self.split_index]
                 self.hevc_files = self.hevc_file_paths[:self.split_index]  
-                return self.split_index * number_samples
+                self.sample_length = self.split_index * number_samples
             
             elif self.val:
                 val_len = n_dirs - self.split_index
                 self.gt_files  =  self.gt_file_paths[self.split_index:]
                 self.hevc_files = self.hevc_file_paths[self.split_index:]
-                return val_len * number_samples
+                self.sample_length =  val_len * number_samples
 
     def populate_data(self, hevc_file_paths, dir_index, sample_index):
     
@@ -147,14 +133,7 @@ class CommaLoader(Dataset):
         return stack_frames, gt_plan, gt_plan_prob 
 
     def __len__(self):
-
-        if self.data_type =="dummy":
-            sample_length = self.split_data()
-            return sample_length
-        
-        elif self.data_type == "gen_gt":
-            sample_length = self.split_data()
-            return sample_length
+        return self.sample_length
 
     def __getitem__(self, index):
         
@@ -187,28 +166,29 @@ class CommaLoader(Dataset):
             meta_desire, pose)
         
         elif self.data_type == "gen_gt":
-
             dir_index = index // 1190
             sample_index = index % 1190
-
+            
             datayuv, data_gt, data_gt_prob = self.populate_data(self.hevc_files, dir_index, sample_index)
-            datayuv = torch.from_numpy(datayuv).float().to(self.device)
-            data_gt = torch.from_numpy(data_gt).float().to(self.device)
-            data_gt_prob = torch.from_numpy(data_gt_prob).float().to(self.device)
+            ## when use multiple workers put the data tensors on device in train loop
+            datayuv = torch.from_numpy(datayuv)
+            data_gt = torch.from_numpy(data_gt)
+            data_gt_prob = torch.from_numpy(data_gt_prob)
             return datayuv, (data_gt, data_gt_prob)
 
-if __name__ == "__main__":
-    comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
+# if __name__ == "__main__":
+#     comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    numpy_paths = ["inputdata.npz","gtdata.npz"]
-    devices = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     numpy_paths = ["inputdata.npz","gtdata.npz"]
+#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     print(device)
 
-    comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt",device = devices, train= True)
-    comma_loader = DataLoader(comma_data, batch_size=2, num_workers=10 )
+#     comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt",train= True)
+#     comma_loader = DataLoader(comma_data, batch_size=2, num_workers=2, shuffle= False)
     
-    print("checking the sahpes of the loader outs")
-    for i, j in comma_loader:
-        yuv, data = j
-        print(yuv.shape)
-        print(data[0].shape)
-        print(data[1].shape)
+#     print("checking the sahpes of the loader outs")
+#     for i, j in enumerate(comma_loader):
+#         yuv, data = j
+#         print(yuv.shape)
+#         print(data[0].shape)
+#         print(data[1].shape)
