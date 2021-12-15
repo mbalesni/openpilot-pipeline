@@ -15,6 +15,7 @@ from onnx2pytorch import ConvertModel
 import onnx
 import wandb
 
+
 cuda = torch.cuda.is_available()
 if cuda:
     import torch.backends.cudnn as cudnn
@@ -81,6 +82,9 @@ check_val_epoch =2
 batch_size = args.batch_size
 split_per = 0.8
 
+#wandb init
+# run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
+
 ### Load data and split in test and train
 print("=>Loading data")
 print("=>Preparing the dataloader")
@@ -138,6 +142,7 @@ def load_model(params_scratch, pathplan):
 
 comma_model = load_model(param_scratch_model, pathplan_layer_names)
 comma_model = comma_model.to(device)
+# wandb.watch(comma_model) # Log the network weight histograms
 
 #allowing grad only for path_plan
 for name, param in comma_model.named_parameters():
@@ -190,7 +195,174 @@ else:
         9. If multi-hypothesis exists it will be there for all the rest of the outputs with probabilities along with the output
             like plan, lanellines, road-edges and more... 
 """
+#Loss functions:
+def cal_path_loss(plan_pred, plan_gt, plan_prob_gt, batch_size ):
+    ## path plan
+    path_dict = {} 
+    path_plans =  plan_pred
+    path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+    path_dict["path_prob"] = []
+    path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
+    path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
+                    path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
+    #naive path_loss---> train all the paths together
+
+    path1_gt = plan_gt[:,0,:,:,:] 
+    path2_gt = plan_gt[:,1,:,:,:]
+    path3_gt = plan_gt[:,2,:,:,:]
+    path4_gt = plan_gt[:,3,:,:,:]
+    path5_gt =plan_gt[:,4,:,:,:]
+    
+    def mean_std(array):
+        mean = array[:,0,:,:]
+        std = array[:,1,:,:]
+        std = torch.exp(std) ## lower bound == 0; must be +ve
+        return mean, std
+
+    mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
+    mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
+
+    mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
+    mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
+
+    mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
+    mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
+    
+    mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
+    mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
+
+    mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
+    mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
+    
+    
+    def calcualte_path_loss(mean1, mean2, std1, std2):
+        d1 = torch.distributions.normal.Normal(mean1, std1)
+        d2 = torch.distributions.normal.Normal(mean2, std2)
+        loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
+        return loss
+
+    path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
+    path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
+    path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
+    path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
+    path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
+
+    path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
+    path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
+    path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
+
+    path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
+    
+    return path_plan_loss
+
+"""
+Note: other loss functions to be used when training with scratch 
+"""
+# ## lanelines
+# lane_pred = lane_pred.reshape(batch_size, 4,2,33,2)
+# mean_lane_pred = lane_pred[:,:,0,:,:] 
+# mean_lane_gt =  lane_line_gt[:,:,0,:,:]
+# std_lane_pred = lane_pred[:,:,1,:,:]
+# std_lane_gt = lane_line_gt[:,:,0,:,:]
+
+# lane_pred_d = torch.distributions.normal.Normal(mean_lane_pred, std_lane_pred)
+# lane_gt_d = torch.distributions.normal.Normal(mean_lane_gt, std_lane_gt)
+# lane_loss = torch.distributions.kl.kl_divergence(lane_pred_d, lane_gt_d).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+
+# ## lanelines probability
+# lane_prob_pred = lane_prob_pred.reshape(batch_size,4,2)
+
+# lane_prob_pred_d = torch.distributions.categorical.Categorical(logits = lane_prob_pred)
+# lane_prob_gt_d = torch.distributions.categorical.Categorical(logits = lane_prob_gt)
+# lane_prob_loss = torch.distributions.kl.kl_divergence(lane_prob_pred_d, lane_prob_gt_d).sum(dim=1).mean(dim=0)
+
+# ## Road edges
+# road_edges_pred = road_edges_pred.reshape(batch_size,2,2,33,2)
+
+# mean_road_edges_pred = road_edges_pred[:,:,0,:,:]
+# mean_road_edges_gt = road_edges_gt[:,:,0,:,:]
+
+# std_road_edges_pred = road_edges_pred[:,:,0,:,:]
+# std_road_edges_gt = road_edges_gt[:,:,0,:,:]
+# edges_pred_d = torch.distributions.normal.Normal(mean_road_edges_pred, std_road_edges_pred)
+# edges_gt_d = torch.distributions.normal.Normal(mean_road_edges_gt, std_road_edges_gt)
+# road_edges_loss = torch.distributions.kl.kl_divergence(edges_pred_d, edges_gt_d).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+
+# ## Lead car
+# leads_pred = leads_pred.reshape(batch_size, 2, 51)
+# leads_pred_other = leads_pred[:,:, :48].reshape(batch_size,2,2,6,4)
+# leads_pred_prob = leads_pred[:,:, 48:]
+
+# mean_leads_pred_other = leads_pred_other[:,:,0,:,:]
+# mean_leads_gt = leads_gt[:,:,0,:,:]
+
+# std_leads_pred_other = leads_pred_other[:,:,1,:,:]
+# std_leads_gt =leads_gt[:,:,1,:,:]
+
+# d1 = torch.distributions.normal.Normal(mean_leads_pred_other, std_leads_pred_other)
+# d2 = torch.distributions.normal.Normal(mean_leads_gt, std_leads_gt)
+# leads_other_loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+
+# d3 = torch.distributions.categorical.Categorical(logits = leads_pred_prob)
+# d4 = torch.distributions.categorical.Categorical(logits = leads_prob_gt)
+# leads_prob_loss = torch.distributions.kl.kl_divergence(d3, d4).sum(dim = 1).mean(dim =0)
+
+# Leads_loss = leads_other_loss + leads_prob_loss
+
+# # ## Lead Probabilities
+# lead_prob_gt = lead_prob_gt[:,0,:]
+
+# lead_prob_pred_d=  torch.distributions.categorical.Categorical(logits = lead_prob_pred)
+# lead_prob_gt_d = torch.distributions.categorical.Categorical(logits = lead_prob_gt)
+# lead_prob_loss = torch.distributions.kl.kl_divergence(lead_prob_pred_d, lead_prob_gt_d).mean(dim=0)
+
+# ## Desire
+# desire_gt = desire_gt[:,0,:]
+# desire_pred_d = torch.distributions.categorical.Categorical(logits = desire_pred)
+# desire_gt_d = torch.distributions.categorical.Categorical(logits = desire_gt)
+# desire_loss = torch.distributions.kl.kl_divergence(desire_pred_d, desire_gt_d).mean(dim=0)
+
+# ## meta1 
+# meta_pred_engagement = meta_pred[:,0].reshape(batch_size,1)
+# meta_pred_various = meta_pred[:,1:36].reshape(batch_size, 5, 7)
+# meta_pred_blinkers = meta_pred[:,36:].reshape(batch_size, 6, 2)
+# meta_pred_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_pred_engagement)
+# meta_gt_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_eng_gt)
+# meta_engagement_loss = torch.distributions.kl.kl_divergence(meta_pred_engagement_d, meta_gt_engagement_d).mean(dim=0)
+
+# meta_pred_various_d = torch.distributions.categorical.Categorical(logits = meta_pred_various)
+# meta_gt_various_d = torch.distributions.categorical.Categorical(logits = meta_various_gt)
+# meta_various_loss = torch.distributions.kl.kl_divergence(meta_pred_various_d, meta_gt_various_d).sum(dim =1).mean(dim =0)
+
+# meta_pred_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_pred_blinkers)
+# meta_gt_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_blinkers_gt)
+# meta_blinkers_loss = torch.distributions.kl.kl_divergence(meta_pred_blinkers_d, meta_gt_blinkers_d).sum(dim =1).mean(dim =0)
+        
+# meta1loss = meta_engagement_loss + meta_various_loss + meta_blinkers_loss
+
+# ## meta desire
+# meta_desire_pred = meta_desire_pred.reshape(batch_size,4,8)
+# meta_desire_pred_d =  torch.distributions.categorical.Categorical(logits = meta_desire_pred)
+# meta_desire_gt_d = torch.distributions.categorical.Categorical(logits = meta_desire_gt)
+# meta_desire_loss = torch.distributions.kl.kl_divergence(meta_desirlabels_path_probe_pred_d, meta_desire_gt_d).sum(dim=1).mean(dim =0)
+
+# ##pose
+# pose_pred = pose_pred.reshape(batch_size,2,6)        
+# mean_pose_pred = pose_pred[:,0,:]
+# std_pose_pred = pose_pred[:,1,:]
+# mean_pose_gt = pose_gt[:,0,:]
+# std_pose_gt = pose_gt[:,1,:]
+# pose_pred_dist_obj = torch.distributions.normal.Normal(mean_pose_pred, std_pose_pred)
+# pose_gt_dist_obj =  torch.distributions.normal.Normal(mean_pose_gt, std_pose_gt)
+# pose_loss = torch.distributions.kl.kl_divergence(pose_pred_dist_obj, pose_gt_dist_obj)
+# pose_loss = pose_loss.sum(dim=1).mean(dim=0)
+
 # ## train loop 
+
 
 #initializing recurrent state by zeros
 recurrent_state = torch.zeros(batch_size,512,dtype = torch.float32)
@@ -200,8 +372,6 @@ desire = torch.zeros(batch_size,8,dtype = torch.float32)
 desire = desire.to(device)
 traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
 traffic_convention = traffic_convention.to(device)
-# run = wandb.init(project="test-project", entity="openpilot_project")
-
 
 # with run:
 #     wandb.config.lr = lr
@@ -252,189 +422,18 @@ for epoch in tqdm(range(epochs)):
             recurrent_state = output2 ## Feed back the recurrent state
         
         elif args.datatype == "gen_gt" and args.modeltype == "onnx":
-            print("====> start to train" )
             inputs_to_pretained_model = {"input_imgs":input[0],
                                         "desire": desire,
                                         "traffic_convention":traffic_convention,
                                         "initial_state": recurrent_state}
             
             outputs = comma_model(**inputs_to_pretained_model) 
-            # print(outputs.shape)
-            print("=> outshape shape:", outputs.shape)
             plan_predictions = outputs[:,:4955]
-            print("=>plan predictions shape:", plan_predictions.shape)
             recurrent_state = outputs[:,5960:] ## important to refeed state of GRU
-            print("=>recurrent state shape:", recurrent_state.shape)
 
-        def cal_path_loss(plan_pred, plan_gt, plan_prob_gt, batch_size ):
-            ## path plan
-            path_dict = {} 
-            path_plans =  plan_pred
-            path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
-            path_dict["path_prob"] = []
-            path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
-            path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
-            path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
-            path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
-            path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
-            path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
-                            path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
-            #naive path_loss---> train all the paths together
-
-            path1_gt = plan_gt[:,0,:,:,:] 
-            path2_gt = plan_gt[:,1,:,:,:]
-            path3_gt = plan_gt[:,2,:,:,:]
-            path4_gt = plan_gt[:,3,:,:,:]
-            path5_gt =plan_gt[:,4,:,:,:]
-            
-            def mean_std(array):
-                mean = array[:,0,:,:]
-                std = array[:,1,:,:]
-                std = torch.exp(std) ## lower bound == 0; must be +ve
-                return mean, std
-
-            mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
-            mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
-
-            mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
-            mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
-
-            mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
-            mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
-            
-            mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
-            mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
-
-            mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
-            mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
-            
-            
-            def calcualte_path_loss(mean1, mean2, std1, std2):
-                d1 = torch.distributions.normal.Normal(mean1, std1)
-                d2 = torch.distributions.normal.Normal(mean2, std2)
-                loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
-                return loss
-
-            path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
-            path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
-            path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
-            path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
-            path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
-
-            path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
-            path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
-            path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
-        
-            path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
-            
-            return path_plan_loss
-        
-        """
-        Note: other loss functions to be used when training with scratch 
-        """
-        # ## lanelines
-        # lane_pred = lane_pred.reshape(batch_size, 4,2,33,2)
-        # mean_lane_pred = lane_pred[:,:,0,:,:] 
-        # mean_lane_gt =  lane_line_gt[:,:,0,:,:]
-        # std_lane_pred = lane_pred[:,:,1,:,:]
-        # std_lane_gt = lane_line_gt[:,:,0,:,:]
-
-        # lane_pred_d = torch.distributions.normal.Normal(mean_lane_pred, std_lane_pred)
-        # lane_gt_d = torch.distributions.normal.Normal(mean_lane_gt, std_lane_gt)
-        # lane_loss = torch.distributions.kl.kl_divergence(lane_pred_d, lane_gt_d).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
-        
-        # ## lanelines probability
-        # lane_prob_pred = lane_prob_pred.reshape(batch_size,4,2)
-        
-        # lane_prob_pred_d = torch.distributions.categorical.Categorical(logits = lane_prob_pred)
-        # lane_prob_gt_d = torch.distributions.categorical.Categorical(logits = lane_prob_gt)
-        # lane_prob_loss = torch.distributions.kl.kl_divergence(lane_prob_pred_d, lane_prob_gt_d).sum(dim=1).mean(dim=0)
-        
-        # ## Road edges
-        # road_edges_pred = road_edges_pred.reshape(batch_size,2,2,33,2)
-        
-        # mean_road_edges_pred = road_edges_pred[:,:,0,:,:]
-        # mean_road_edges_gt = road_edges_gt[:,:,0,:,:]
-
-        # std_road_edges_pred = road_edges_pred[:,:,0,:,:]
-        # std_road_edges_gt = road_edges_gt[:,:,0,:,:]
-        # edges_pred_d = torch.distributions.normal.Normal(mean_road_edges_pred, std_road_edges_pred)
-        # edges_gt_d = torch.distributions.normal.Normal(mean_road_edges_gt, std_road_edges_gt)
-        # road_edges_loss = torch.distributions.kl.kl_divergence(edges_pred_d, edges_gt_d).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
-       
-        # ## Lead car
-        # leads_pred = leads_pred.reshape(batch_size, 2, 51)
-        # leads_pred_other = leads_pred[:,:, :48].reshape(batch_size,2,2,6,4)
-        # leads_pred_prob = leads_pred[:,:, 48:]
-        
-        # mean_leads_pred_other = leads_pred_other[:,:,0,:,:]
-        # mean_leads_gt = leads_gt[:,:,0,:,:]
-
-        # std_leads_pred_other = leads_pred_other[:,:,1,:,:]
-        # std_leads_gt =leads_gt[:,:,1,:,:]
-
-        # d1 = torch.distributions.normal.Normal(mean_leads_pred_other, std_leads_pred_other)
-        # d2 = torch.distributions.normal.Normal(mean_leads_gt, std_leads_gt)
-        # leads_other_loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
-
-        # d3 = torch.distributions.categorical.Categorical(logits = leads_pred_prob)
-        # d4 = torch.distributions.categorical.Categorical(logits = leads_prob_gt)
-        # leads_prob_loss = torch.distributions.kl.kl_divergence(d3, d4).sum(dim = 1).mean(dim =0)
-        
-        # Leads_loss = leads_other_loss + leads_prob_loss
-        
-        # # ## Lead Probabilities
-        # lead_prob_gt = lead_prob_gt[:,0,:]
-
-        # lead_prob_pred_d=  torch.distributions.categorical.Categorical(logits = lead_prob_pred)
-        # lead_prob_gt_d = torch.distributions.categorical.Categorical(logits = lead_prob_gt)
-        # lead_prob_loss = torch.distributions.kl.kl_divergence(lead_prob_pred_d, lead_prob_gt_d).mean(dim=0)
-        
-        # ## Desire
-        # desire_gt = desire_gt[:,0,:]
-        # desire_pred_d = torch.distributions.categorical.Categorical(logits = desire_pred)
-        # desire_gt_d = torch.distributions.categorical.Categorical(logits = desire_gt)
-        # desire_loss = torch.distributions.kl.kl_divergence(desire_pred_d, desire_gt_d).mean(dim=0)
-
-        # ## meta1 
-        # meta_pred_engagement = meta_pred[:,0].reshape(batch_size,1)
-        # meta_pred_various = meta_pred[:,1:36].reshape(batch_size, 5, 7)
-        # meta_pred_blinkers = meta_pred[:,36:].reshape(batch_size, 6, 2)
-        # meta_pred_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_pred_engagement)
-        # meta_gt_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_eng_gt)
-        # meta_engagement_loss = torch.distributions.kl.kl_divergence(meta_pred_engagement_d, meta_gt_engagement_d).mean(dim=0)
-        
-        # meta_pred_various_d = torch.distributions.categorical.Categorical(logits = meta_pred_various)
-        # meta_gt_various_d = torch.distributions.categorical.Categorical(logits = meta_various_gt)
-        # meta_various_loss = torch.distributions.kl.kl_divergence(meta_pred_various_d, meta_gt_various_d).sum(dim =1).mean(dim =0)
-        
-        # meta_pred_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_pred_blinkers)
-        # meta_gt_blinkers_d = torch.distributions.categorical.Categorical(logits = meta_blinkers_gt)
-        # meta_blinkers_loss = torch.distributions.kl.kl_divergence(meta_pred_blinkers_d, meta_gt_blinkers_d).sum(dim =1).mean(dim =0)
-                
-        # meta1loss = meta_engagement_loss + meta_various_loss + meta_blinkers_loss
-
-        # ## meta desire
-        # meta_desire_pred = meta_desire_pred.reshape(batch_size,4,8)
-        # meta_desire_pred_d =  torch.distributions.categorical.Categorical(logits = meta_desire_pred)
-        # meta_desire_gt_d = torch.distributions.categorical.Categorical(logits = meta_desire_gt)
-        # meta_desire_loss = torch.distributions.kl.kl_divergence(meta_desirlabels_path_probe_pred_d, meta_desire_gt_d).sum(dim=1).mean(dim =0)
-       
-        # ##pose
-        # pose_pred = pose_pred.reshape(batch_size,2,6)        
-        # mean_pose_pred = pose_pred[:,0,:]
-        # std_pose_pred = pose_pred[:,1,:]
-        # mean_pose_gt = pose_gt[:,0,:]
-        # std_pose_gt = pose_gt[:,1,:]
-        # pose_pred_dist_obj = torch.distributions.normal.Normal(mean_pose_pred, std_pose_pred)
-        # pose_gt_dist_obj =  torch.distributions.normal.Normal(mean_pose_gt, std_pose_gt)
-        # pose_loss = torch.distributions.kl.kl_divergence(pose_pred_dist_obj, pose_gt_dist_obj)
-        # pose_loss = pose_loss.sum(dim=1).mean(dim=0)
-
-        if args.datatype =="gen_gt" and args.modeltype == "onnx":
             Combined_loss = cal_path_loss(plan_predictions, labels_path, labels_path_prob, batch_size)
+            
             Combined_loss.backward()
-
             loss_cpu = Combined_loss.detach().clone().cpu().item() ## this is the loss for one batch in one interation
             tr_loss += loss_cpu
             run_loss += loss_cpu
@@ -443,7 +442,6 @@ for epoch in tqdm(range(epochs)):
             if (tr_it+1)%10 == 0:
                 print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
                 if (tr_it+1) %100 == 0:
-                    ### plot the loss and optimizer lr wrt time in weights and biases
                     # tr_logger.plotTr( run_loss /100, optimizer.param_groups['lr'], time.time() - start_point )
                     scheduler.step(run_loss/100)
                     run_loss =0.0
@@ -481,12 +479,12 @@ for epoch in tqdm(range(epochs)):
                             print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
 
                     print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
-                    # val_logger.plotTr(val_loss_cpu,optimizer.param_groups['lr'], time.time() - val_st_pt)
+                    # val_logger.plotTr(val_loss_cpu, optimizer.param_groups['lr'], time.time() - val_st_pt)
                         
                     del val_loss, val_outputs
 
     print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}")
-    # tr_logger.plotTr()
+    # tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups['lr'], time.time() - start_point )
 
 PATH = "./nets/model_itr/" +name + ".pth" 
 torch.save(comma_model.state_dict(), PATH)
