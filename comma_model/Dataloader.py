@@ -94,7 +94,8 @@ class CommaLoader(Dataset):
                 self.gt_files  =  self.gt_file_paths[self.split_index:]
                 self.hevc_files = self.hevc_file_paths[self.split_index:]
                 self.sample_length =  val_len * number_samples
-
+        print("length of samples:", self.sample_length)
+        
     def populate_data(self, hevc_file_paths, dir_index, sample_index):
     
         path, file =os.path.split(hevc_file_paths[dir_index])
@@ -179,15 +180,13 @@ class CommaLoader(Dataset):
 #     comma_recordings_path = "/gpfs/space/projects/Bolt/comma_recordings"
 
 #     numpy_paths = ["inputdata.npz","gtdata.npz"]
-#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-#     print(device)
-
 #     comma_data = CommaLoader(comma_recordings_path, numpy_paths, 0.8, "gen_gt",train= True)
 #     comma_loader = DataLoader(comma_data, batch_size=2, num_workers=2, shuffle= False)
     
-#     print("checking the sahpes of the loader outs")
+#     print("checking the shapes of the loader outs")
 #     for i, j in enumerate(comma_loader):
+#         print("I am in the loop of prints.")
 #         yuv, data = j
-#         print(yuv.shape)
-#         print(data[0].shape)
-#         print(data[1].shape)
+#         print("Testing the shape of input tensor",yuv[0].shape)
+#         print("Testing the shape of labels",data[0].shape)
+#         print("Testing the shape of labels",data[1].shape)
