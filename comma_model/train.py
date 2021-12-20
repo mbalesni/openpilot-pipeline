@@ -434,6 +434,14 @@ with run:
                 optimizer.zero_grad()
                 
                 batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+                
+                # def updt_recurr(value_recurr):
+                    
+                #     update
+
+
+                #     return update_recurr
+
                 for i in range(batch_size):
                 # recurr_state = recurrent_state.clone()
                 
@@ -447,10 +455,12 @@ with run:
                     recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
 
                     single_itr_loss = cal_path_loss(plan_predictions, labels_path[i], labels_path_prob[i], 1)
-                    recurr_state = recurr
-                    batch_loss += single_itr_loss
+                    if i == batch_size -1:
+                        recurr = recurr
+                    else:   
+                        recurr_state = recurr
 
-                
+                    batch_loss += single_itr_loss
                 batch_loss  = batch_loss/batch_size # mean of losses of samples in batch
                 
                 # recurrent warmup
@@ -458,10 +468,9 @@ with run:
                     batch_loss = batch_loss 
                 else: 
                     batch_loss.backward(retain_graph = True)
-                
                 loss_cpu = batch_loss.detach().clone().item() ## this is the loss for one batch in one interation
                 
-                # recurr_state = recurr
+                recurr_state = recurr
                 tr_loss += loss_cpu
                 run_loss += loss_cpu
                 optimizer.step()
@@ -470,7 +479,7 @@ with run:
                     print("printing the losses")
                     print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
                     if (tr_it+1) %100 == 0:
-                        tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
+                        # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
                         scheduler.step(run_loss/100)
                         run_loss =0.0
                     
