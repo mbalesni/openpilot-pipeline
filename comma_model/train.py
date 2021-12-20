@@ -62,7 +62,7 @@ val_logger = Logger("validation")
 
 print("=>intializing hyperparams")
 #Hyperparams
-date_it  = "_17dec"
+date_it  = "_20dec"
 name = "onnx_gen_gt_comma_pipeline_" + date_it
 path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
@@ -364,15 +364,21 @@ Note: other loss functions to be used when training with scratch
 # pose_loss = pose_loss.sum(dim=1).mean(dim=0)
 
 ### train loop 
-#initializing recurrent state by zeros
-recurrent_state = torch.zeros(batch_size,512,dtype = torch.float32)
-recurrent_state = recurrent_state.to(device)
 
-# desure and traffic convention is also set to zero
-desire = torch.zeros(batch_size,8,dtype = torch.float32, requires_grad= True)
-desire = desire.to(device)
-traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32, requires_grad= True)
-traffic_convention = traffic_convention.to(device)
+#batchsize in this case is 1 as init recurr, desire and traffic conv reamain same. 
+#initializing recurrent state by zeros
+recurr_state = torch.zeros(1,512,dtype = torch.float32)
+recurr_state = recurr_state.requires_grad_(True).to(device)
+
+# desire and traffic convention is also set to zero
+desire = torch.zeros(1,8,dtype = torch.float32, requires_grad= True)
+desire = desire.requires_grad_(True).to(device)
+
+#LHD
+traffic_convention = torch.zeros(1,2, dtype = torch.float32)
+traffic_convention[0][1] =1 
+traffic_convention = traffic_convention.requires_grad_(True).to(device)
+
 
 with run:
     wandb.config.lr = lr
@@ -386,12 +392,6 @@ with run:
         run_loss = 0.0
 
         for tr_it , data in tqdm(enumerate(train_loader)):
-            input, labels = data
-            input = input.to(device)
-            labels_path = labels[0].to(device)
-            labels_path_prob = labels[1].to(device)
-            optimizer.zero_grad()
-
             if args.datatype == "dummy" and args.modeltype == "scratch":        
                 #input
                 yuv_images = input[0].to(device)
@@ -427,28 +427,41 @@ with run:
             """
             if args.datatype == "gen_gt" and args.modeltype == "onnx":
                 print("yes i am in the loop")    
-                recurr_state = recurrent_state.clone().requires_grad_(True)
+                input, labels = data
+                input = input.to(device)
+                labels_path = labels[0].to(device)
+                labels_path_prob = labels[1].to(device)
+                optimizer.zero_grad()
                 
-                inputs_to_pretained_model = {"input_imgs":input[0],
-                                            "desire": desire,
-                                            "traffic_convention":traffic_convention,
-                                            "initial_state": recurr_state}
+                batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+                for i in range(batch_size):
+                # recurr_state = recurrent_state.clone()
                 
-                outputs = comma_model(**inputs_to_pretained_model) 
-                plan_predictions = outputs[:,:4955].clone()
-                recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
+                    inputs_to_pretained_model = {"input_imgs":input[i],
+                                                "desire": desire,
+                                                "traffic_convention":traffic_convention,
+                                                "initial_state": recurr_state}
+                    
+                    outputs = comma_model(**inputs_to_pretained_model) 
+                    plan_predictions = outputs[:,:4955].clone()
+                    recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
 
-                Combined_loss = cal_path_loss(plan_predictions, labels_path, labels_path_prob, batch_size)
+                    single_itr_loss = cal_path_loss(plan_predictions, labels_path[i], labels_path_prob[i], 1)
+                    recurr_state = recurr
+                    batch_loss += single_itr_loss
+
+                
+                batch_loss  = batch_loss/batch_size # mean of losses of samples in batch
                 
                 # recurrent warmup
                 if recurr_warmup and epoch == 0 and tr_it>10:
-                    Combined_loss =Combined_loss 
+                    batch_loss = batch_loss 
                 else: 
-                    Combined_loss.backward(retain_graph = True)
+                    batch_loss.backward(retain_graph = True)
                 
-                loss_cpu = Combined_loss.detach().clone().item() ## this is the loss for one batch in one interation
+                loss_cpu = batch_loss.detach().clone().item() ## this is the loss for one batch in one interation
                 
-                recurr_state = recurr
+                # recurr_state = recurr
                 tr_loss += loss_cpu
                 run_loss += loss_cpu
                 optimizer.step()
@@ -461,7 +474,7 @@ with run:
                         scheduler.step(run_loss/100)
                         run_loss =0.0
                     
-            ## validation loop  
+            # validation loop  
                 with torch.no_grad(): ## saving memory by not accumulating activations
                     if (epoch +1) %check_val_epoch ==0:
                         val_st_pt = time.time()
@@ -476,17 +489,22 @@ with run:
                             val_input = val_input.to(device)
                             val_label_path = val_labels[0].to(device)
                             val_label_path_prob = val_labels[1].to(device)
+                            val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+                            
+                            for i in range(batch_size):
+                                val_inputs_to_pretained_model = {"input_imgs":val_input[i],
+                                                        "desire": desire,
+                                                        "traffic_convention":traffic_convention,
+                                                        "initial_state": recurr_state}
+                            
+                                val_outputs = comma_model(**val_inputs_to_pretained_model)
+                                val_path_prediction = val_outputs[:,:4955].clone()
 
-                            val_inputs_to_pretained_model = {"input_imgs":val_input[0],
-                                                    "desire": desire,
-                                                    "traffic_convention":traffic_convention,
-                                                    "initial_state": recurrent_state}
-                        
-                            val_outputs = comma_model(**val_inputs_to_pretained_model)
-
-                            val_path_prediction = val_outputs[:,:4955].clone()
-                            val_loss = cal_path_loss(val_path_prediction,val_label_path, val_label_path_prob, batch_size)
-                            val_loss_cpu += val_loss.deatch().clone().cpu().item()
+                                single_val_loss = cal_path_loss(val_path_prediction,val_label_path[i], val_label_path_prob[i], 1)
+                                val_batch_loss += single_val_loss
+                            
+                            val_batch_loss = val_batch_loss/batch_size
+                            val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
 
                             if (val_itr+1)%10 == 0:
                                 print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
