@@ -25,6 +25,7 @@ else:
     device = torch.device("cpu")
 print("=> using '{}' for computation.".format(device))
 
+
 #for reproducibility 
 seed = np.random.randint(2**16)
 torch.manual_seed(seed)
@@ -67,8 +68,9 @@ path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
 n_workers = 20
-lr = (1e-4, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
+lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
 diff_lr = False
+recurr_warmup = True
 l2_lambda = (1e-4,1e-4,1e-4) 
 lrs_factor = 0.75
 lrs_patience = 50
@@ -424,8 +426,7 @@ with run:
             and move on to processing seq of batches.
             """
             if args.datatype == "gen_gt" and args.modeltype == "onnx":
-                print("yes i am in the loop")
-                    
+                print("yes i am in the loop")    
                 recurr_state = recurrent_state.clone().requires_grad_(True)
                 
                 inputs_to_pretained_model = {"input_imgs":input[0],
@@ -438,7 +439,13 @@ with run:
                 recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
 
                 Combined_loss = cal_path_loss(plan_predictions, labels_path, labels_path_prob, batch_size)
-                Combined_loss.backward(retain_graph = True)
+                
+                # recurrent warmup
+                if recurr_warmup and epoch == 0 and tr_it>10:
+                    Combined_loss =Combined_loss 
+                else: 
+                    Combined_loss.backward(retain_graph = True)
+                
                 loss_cpu = Combined_loss.detach().clone().item() ## this is the loss for one batch in one interation
                 
                 recurr_state = recurr
@@ -450,7 +457,7 @@ with run:
                     print("printing the losses")
                     print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
                     if (tr_it+1) %100 == 0:
-                        tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point )
+                        tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
                         scheduler.step(run_loss/100)
                         run_loss =0.0
                     
@@ -477,7 +484,7 @@ with run:
                         
                             val_outputs = comma_model(**val_inputs_to_pretained_model)
 
-                            val_path_prediction = val_outputs[:,:4955]
+                            val_path_prediction = val_outputs[:,:4955].clone()
                             val_loss = cal_path_loss(val_path_prediction,val_label_path, val_label_path_prob, batch_size)
                             val_loss_cpu += val_loss.deatch().clone().cpu().item()
 
