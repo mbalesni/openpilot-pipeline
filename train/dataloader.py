@@ -1,24 +1,27 @@
 import sys
-import torch
 import numpy as np
 from tqdm import tqdm
 import h5py
 import glob
-from utils import *
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset, DataLoader
 import os
-print("yes I am in the job ")
-sys.path.append("../")
+import cv2
+import math
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa
+from utils import bgr_to_yuv, transform_frames, printf  # noqa
+
+
+MIN_SEGMENT_LENGTH = 1190
 
 cache_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
 path_to_videos_cache = os.path.join(cache_folder, 'videos.txt')
-path_to_gts_cache = os.path.join(cache_folder, 'ground_truths.txt')
+path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
 
-class CommaLoader(Dataset):
+class CommaLoader(IterableDataset):
 
-    def __init__(self, recordings_basedir, npz_paths, split_per, data_type, train=False, val=False):
+    def __init__(self, recordings_basedir, train_split, seq_len=32, validation=False, shuffle=False, seed=42):
         super(CommaLoader, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -31,137 +34,85 @@ class CommaLoader(Dataset):
         Args: ------------------
         """
         self.recordings_basedir = recordings_basedir
-        self.data_type = data_type
-        self.npz_paths = npz_paths
-        self.train = train
-        self.val = val
-        self.split_per = split_per
+        self.validation = validation
+        self.train_split = train_split
+        self.shuffle = shuffle
+        self.seq_len = seq_len
+        self.seed = seed
 
-        if self.npz_paths is None:
-            raise TypeError("add dummy data paths")
-
-        elif self.recordings_basedir is None:
+        if self.recordings_basedir is None or not os.path.exists(self.recordings_basedir):
             raise TypeError("recordings path is wrong")
 
-        elif self.data_type == "dummy":
-            self.input = np.load(self.npz_paths[0])
-            self.gt = np.load(self.npz_paths[1])
+        self.hevc_file_paths, self.gt_file_paths = get_paths(self.recordings_basedir, min_segment_len=MIN_SEGMENT_LENGTH)
+        n_segments = len(self.hevc_file_paths)
+        printf("# of segments", n_segments)
 
-            numberofsamples = self.input['imgs'][0].shape
-            length_data = numberofsamples[0]
-            self.split_index = int(np.round(length_data * self.split_per))
+        full_index = list(range(n_segments))
 
-            if self.train:
-                len_for_loader = self.split_index
-                self.sample_length = len_for_loader
+        # shuffle full train+val together *once*
+        if self.shuffle:
+            rng = np.random.default_rng(seed)
+            rng.shuffle(full_index)
 
-            elif self.val:
-                len_for_loader = length_data - self.split_index
-                self.sample_length = len_for_loader
+        split_idx = int(np.round(n_segments * self.train_split))
 
-        elif self.data_type == "gen_gt":
+        if not self.validation:
+            self.index = full_index[:split_idx]
+        else:
+            self.index = full_index[split_idx:]
 
-            self.hevc_file_paths, self.gt_file_paths = get_paths(self.recordings_basedir)
-
-            print("paths loaded")
-            print("length of video files", len(self.hevc_file_paths))
-            print("lenght of gt files", len(self.gt_file_paths))
-            # print(self.hevc_file_paths)
-            n_dirs = len(self.hevc_file_paths)
-            number_samples = 1190  # 1190 sample in every dir
-            self.split_index = int(np.round(n_dirs * self.split_per))
-
-            if self.train:
-                self.gt_files = self.gt_file_paths[:self.split_index]
-                self.hevc_files = self.hevc_file_paths[:self.split_index]
-                self.sample_length = self.split_index * number_samples
-
-            elif self.val:
-                val_len = n_dirs - self.split_index
-                self.gt_files = self.gt_file_paths[self.split_index:]
-                self.hevc_files = self.hevc_file_paths[self.split_index:]
-                self.sample_length = val_len * number_samples
-        print("length of samples:", self.sample_length)
-
-    def populate_data(self, hevc_file_paths, dir_index, sample_index):
-
-        path, file = os.path.split(hevc_file_paths[dir_index])
-        frame_dir_name = "hevc_frames"
-        h5_dir_name = "plan.h5"
-        frame_dir_full_path = os.path.join(path, frame_dir_name)
-        h5_file_fullpath = os.path.join(path, h5_dir_name)
-
-        # yuv stacked image of (sample_index) and (sample_index +1)
-        # print(frame_dir_full_path + "/" + str(sample_index) + ".png")
-        # print(frame_dir_full_path + "/" + str(sample_index+1) + ".png")
-        frame_1 = cv2.imread(frame_dir_full_path + "/" + str(sample_index) + ".png")
-        frame_2 = cv2.imread(frame_dir_full_path + "/" + str(sample_index+1) + ".png")
-
-        # print(frame_1.shape)
-        # print(frame_2.shape)
-        yuv_frame1 = bgr_to_yuv(frame_1)
-        yuv_frame2 = bgr_to_yuv(frame_2)
-        list_yuv_frame = [yuv_frame1, yuv_frame2]
-
-        prepared_frames = transform_frames(list_yuv_frame)
-        # print(prepared_frames[0].shape)
-        stack_frames = np.zeros((1, 12, 128, 256))
-        stack_frames = (np.vstack((prepared_frames[0], prepared_frames[1]))).reshape(1, 12, 128, 256)
-        # print(stack_frames.shape)
-
-        h5gt_data = h5py.File(h5_file_fullpath, 'r')
-        gt_plan = h5gt_data['plans'][sample_index]
-        gt_plan_prob = h5gt_data['plans_prob'][sample_index]
-
-        gt_plan = np.array(gt_plan)
-        gt_plan_prob = np.array(gt_plan_prob)
-        h5gt_data.close()
-
-        return stack_frames, gt_plan, gt_plan_prob
+        printf("segments ready to load:", len(self.index))
 
     def __len__(self):
-        return self.sample_length
+        return len(self.index)
 
-    def __getitem__(self, index):
+    def __iter__(self):
 
-        if self.data_type == "dummy" and self.train:
+        # shuffle data subset after each epoch
+        if self.shuffle:
+            rng = np.random.default_rng(self.seed)
+            rng.shuffle(self.index)
 
-            imgs = torch.from_numpy(self.input['imgs'][0][index]).float()
-            desire = torch.from_numpy(self.input['desire'][0][index]).float()
-            traffic_conv = torch.from_numpy(self.input['traff_conv'][0][index]).float()
+        for segment_idx in self.index:
 
-            # need only during intialisation
-            recurrent_state = torch.from_numpy(self.input['recurrent_state'][0][index]).float()
+            self.video = cv2.VideoCapture(self.hevc_file_paths[segment_idx])
+            self.gts = h5py.File(self.gt_file_paths[segment_idx], 'r')
+            self.segment_length = self.gts['plans'].shape[0]
 
-            plan = torch.from_numpy(self.gt['plan'][0][index]).float()
-            plan_prob = torch.from_numpy(self.gt['plan_prob'][0][index]).float()
-            ll = torch.from_numpy(self.gt['ll'][0][index]).float()
-            ll_prob = torch.from_numpy(self.gt['ll_prob'][0][index]).float()
-            road_edges = torch.from_numpy(self.gt['road_edges'][0][index]).float()
-            leads = torch.from_numpy(self.gt['leads'][0][index]).float()
-            leads_prob = torch.from_numpy(self.gt['leads_prob'][0][index]).float()
-            lead_prob = torch.from_numpy(self.gt['lead_prob'][0][index]).float()
-            desire_gt = torch.from_numpy(self.gt['desire'][0][index]).float()
-            meta_eng = torch.from_numpy(self.gt['meta_eng'][0][index]).float()
-            meta_various = torch.from_numpy(self.gt['meta_various'][0][index]).float()
-            meta_blinkers = torch.from_numpy(self.gt['meta_blinkers'][0][index]).float()
-            meta_desire = torch.from_numpy(self.gt['meta_desire'][0][index]).float()
-            pose = torch.from_numpy(self.gt['pose'][0][index]).float()
+            _, frame2 = self.video.read() # initialize last frame
+            yuv_frame2 = bgr_to_yuv(frame2)
 
-            return (imgs, desire, traffic_conv, recurrent_state), (plan, plan_prob,
-                                                                   ll, ll_prob, road_edges, leads, leads_prob, lead_prob, desire_gt, meta_eng, meta_various, meta_blinkers,
-                                                                   meta_desire, pose)
+            n_seqs = math.floor(self.segment_length / self.seq_len)
 
-        elif self.data_type == "gen_gt":
-            dir_index = index // 1190
-            sample_index = index % 1190
+            new_segment = True
 
-            datayuv, data_gt, data_gt_prob = self.populate_data(self.hevc_files, dir_index, sample_index)
-            # when use multiple workers put the data tensors on device in train loop
-            datayuv = torch.from_numpy(datayuv)
-            data_gt = torch.from_numpy(data_gt)
-            data_gt_prob = torch.from_numpy(data_gt_prob)
-            return datayuv, (data_gt, data_gt_prob)
+            for sequence_idx in range(n_seqs):
+
+                if sequence_idx > 0: new_segment = False
+
+                stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
+                
+                # start iteration from 1
+                # to skip the 1st plan step which didn't see 2 stacked frames yet 
+                for t_idx in range(1, self.seq_len):
+                    yuv_frame1 = yuv_frame2
+                    _, frame2 = self.video.read()
+
+                    yuv_frame2 = bgr_to_yuv(frame2)
+
+                    prepared_frames = transform_frames([yuv_frame1, yuv_frame2])
+                    stacked_frames = np.vstack(prepared_frames).reshape(1, 12, 128, 256)
+                    stacked_frame_seq[t_idx] = stacked_frames
+
+                abs_t_indices = slice(sequence_idx*self.seq_len, (sequence_idx+1)*self.seq_len)
+                gt_plan_seq = self.gts['plans'][abs_t_indices]
+                gt_plan_prob_seq = self.gts['plans_prob'][abs_t_indices]
+
+                yield stacked_frame_seq, (gt_plan_seq, gt_plan_prob_seq), new_segment
+
+            self.gts.close()
+
+        return
 
 
 def get_segment_dirs(base_dir):
@@ -171,28 +122,30 @@ def get_segment_dirs(base_dir):
     return sorted(list(set([os.path.dirname(f) for f in gt_files])))
 
 
-def get_paths(base_dir):
+def get_paths(base_dir, min_segment_len=1190):
     '''Get paths to videos and ground truths. Cache them for future reuse.'''
 
     os.makedirs(cache_folder, exist_ok=True)
 
-    if os.path.exists(path_to_videos_cache) and os.path.exists(path_to_gts_cache):
-        print('Using cached paths to videos and GTs...')
+    if os.path.exists(path_to_videos_cache) and os.path.exists(path_to_plans_cache):
+        printf('Using cached paths to videos and GTs...')
         video_paths = []
         gt_paths = []
         with open(path_to_videos_cache, 'r') as f:
             video_paths = f.read().splitlines()
-        with open(path_to_gts_cache, 'r') as f: gt_paths = f.read().splitlines()
+        with open(path_to_plans_cache, 'r') as f:
+            gt_paths = f.read().splitlines()
     else:
-        print('Resolving paths to videos and GTs...')
+        printf('Resolving paths to videos and GTs...')
         segment_dirs = get_segment_dirs(base_dir)
 
         # prevent duplicate writes
         with open(path_to_videos_cache, 'w') as video_paths:
             pass
-        with open(path_to_gts_cache, 'w') as gt_paths: pass
+        with open(path_to_plans_cache, 'w') as gt_paths:
+            pass
 
-        gt_filename = 'marker_and_leads_ground_truth.npz'
+        gt_filename = 'plan.h5'
         video_filenames = ['fcamera.hevc', 'video.hevc']
 
         video_paths = []
@@ -200,9 +153,15 @@ def get_paths(base_dir):
 
         for segment_dir in tqdm(segment_dirs):
 
-            gt_data = np.load(os.path.join(segment_dir, gt_filename))
+            # TODO: wasn't tested after switch to `plan.h5` from npz files
+            gt_file_path = os.path.join(segment_dir, gt_filename)
+            if not os.path.exists(gt_file_path):
+                printf(f'WARNING: not found plan.h5 file in segment: {segment_dir}')
+                continue
 
-            if gt_data['plans'].shape[0] >= 1190:  # keep segments that have >= 1190 samples
+            gt_plan = h5py.File(gt_file_path, 'r')['plans']
+
+            if gt_plan.shape[0] >= min_segment_len:  # keep segments that have >= 1190 samples
 
                 video_files = os.listdir(segment_dir)
                 video_files = [file for file in video_files if file in video_filenames]
@@ -215,27 +174,33 @@ def get_paths(base_dir):
                         video_paths.append(video_path)
                         video_paths_f.write(video_path + '\n')  # cache it
 
-                    with open(path_to_gts_cache, 'a') as gt_paths_f:
-                        gt_path = os.path.join(segment_dir, gt_filename)
-                        gt_paths.append(gt_path)
-                        gt_paths_f.write(gt_path + '\n')  # cache it
+                    with open(path_to_plans_cache, 'a') as gt_paths_f:
+                        gt_paths.append(gt_file_path)
+                        gt_paths_f.write(gt_file_path + '\n')  # cache it
                 else:
-                    print(f'WARNING: found {len(video_files)} in segment: {segment_dir}')
+                    printf(f'WARNING: found {len(video_files)} in segment: {segment_dir}')
 
-        return video_paths, gt_paths
+    return video_paths, gt_paths
 
 
-# if __name__ == "__main__":
-#     comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
+if __name__ == "__main__":
+    comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-#     numpy_paths = ["inputdata.npz","gtdata.npz"]
-#     comma_data = CommaLoader(comma_recordings_basedir, numpy_paths, 0.8, "gen_gt",train= True)
-#     comma_loader = DataLoader(comma_data, batch_size=2, num_workers=2, shuffle= False)
+    train_dataset = CommaLoader(comma_recordings_basedir, 0.8, shuffle=False)
+    valid_dataset = CommaLoader(comma_recordings_basedir, 0.8, shuffle=False, validation=True)
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=1, shuffle=False)
+    valid_loader = DataLoader(valid_dataset, batch_size=1, num_workers=1, shuffle=False)
 
-#     print("checking the shapes of the loader outs")
-#     for i, j in enumerate(comma_loader):
-#         print("I am in the loop of prints.")
-#         yuv, data = j
-#         print("Testing the shape of input tensor",yuv[0].shape)
-#         print("Testing the shape of labels",data[0].shape)
-#         print("Testing the shape of labels",data[1].shape)
+    printf("checking the shapes of the loader outs")
+    for idx, batch in enumerate(valid_loader):
+        frames, (plan, plan_prob), is_new_segment = batch
+
+        printf('Batch', idx)
+        printf('frames:', frames.shape)
+        printf('plan:', frames.shape)
+        printf('plan_prob:', frames.shape)
+        printf('is_new_segment:', frames.shape)
+        printf()
+        
+        if idx > 32 * 37:
+            break

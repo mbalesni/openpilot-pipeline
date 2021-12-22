@@ -19,6 +19,10 @@ eon_intrinsics = np.array([
     [0.,    0.,     1.]])
 
 
+def printf(*args, **kwargs):
+    print(flush=True, *args, **kwargs)
+
+
 def transform_img(base_img,
                   augment_trans=np.array([0, 0, 0]),
                   augment_eulers=np.array([0, 0, 0]),
