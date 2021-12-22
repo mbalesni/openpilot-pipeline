@@ -23,7 +23,7 @@ path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
 class CommaLoader(IterableDataset):
 
-    def __init__(self, recordings_basedir, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42):
+    def __init__(self, recordings_basedir, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42, single_frame_batches=False):
         super(CommaLoader, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -125,8 +125,9 @@ class CommaLoader(IterableDataset):
                     gt_plan = segment_gts['plans'][abs_t_idx]
                     gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
 
-                    yield segment_idx, sequence_idx, t_idx, new_segment
-                    # yield stacked_frames, gt_plan, gt_plan_prob, new_segment
+                    # printf(f'worker {worker_id}. segment {segment_idx}. sequence id {sequence_idx}. timestep {t_idx}. new segment {new_segment}')
+                    # yield segment_idx, sequence_idx, t_idx, new_segment
+                    yield stacked_frames, gt_plan, gt_plan_prob, new_segment
 
                 # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
                 # abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
@@ -226,22 +227,31 @@ class BatchDataLoader:
             yield self.collate_fn(batch)
 
     def collate_fn(self, batch_items):
+        printf('batch size:', len(batch_items))
+        printf('len first elem:', len(batch_items[0]))
+        # printf('shape first elem:', batch_items[0].shape)
         # this creates a copy and wastes memory
         # possible solution: create a batch tensor in main process, share it with workers to fill in their slices (have to know batch shape)
-        return torch.tensor(batch_items).transpose(0, 1)
+        return torch.stack(batch_items)
+        # return torch.tensor(batch_items).transpose(0, 1)
 
     def __len__(self):
         return len(self.loader)
 
 
 if __name__ == "__main__":
-    comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
+    if len(sys.argv) >= 2:
+        comma_recordings_basedir = sys.argv[1]
+    else:
+        comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    batch_size = 10
+    SIMULATED_FORWARD_PASS_TIME = 0.100  # 100 milli-seconds for a single-frame batch (M, 1, 12, 128, 256)
+
+    batch_size = 5
 
     # num_workers must be the same as `batch_size` for data loader to process different segments at the same rate (a forward path takes in input at the same step I in all M segments, instead of steps I±epsilon)
-    num_workers = 13
-    seq_len = 32
+    num_workers = 20
+    seq_len = 100
     train_split = 0.8
 
     train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True)
@@ -256,6 +266,11 @@ if __name__ == "__main__":
     for idx, batch in enumerate(train_loader):
         segment_idx, sequence_idx, t_idx, new_segment = batch
 
+        printf('segment idx:', segment_idx.shape)
+        printf('sequence idx:', sequence_idx.shape)
+        printf('t_idx:', t_idx.shape)
+        printf('new_segment:', new_segment.shape)
+
         new_time = time.time()
         time_delta = new_time - prev_time
         prev_time = new_time
@@ -266,8 +281,8 @@ if __name__ == "__main__":
             printf('Giving time to pre-fetch...')
             time.sleep(10)
 
-        printf('Simulating forward+back prop...')
-        time.sleep(0.1)
+        # printf('Simulating forward+back prop...')
+        time.sleep(SIMULATED_FORWARD_PASS_TIME)
 
         # printf('Batch', idx)
         # printf('frames:', frames.shape)
