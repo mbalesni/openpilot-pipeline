@@ -7,6 +7,8 @@ from torch.utils.data import IterableDataset, DataLoader
 import os
 import cv2
 import math
+import torch
+import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa
 from utils import bgr_to_yuv, transform_frames, printf  # noqa
@@ -21,7 +23,7 @@ path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
 class CommaLoader(IterableDataset):
 
-    def __init__(self, recordings_basedir, train_split, seq_len=32, validation=False, shuffle=False, seed=42):
+    def __init__(self, recordings_basedir, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42):
         super(CommaLoader, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -57,60 +59,79 @@ class CommaLoader(IterableDataset):
         split_idx = int(np.round(n_segments * self.train_split))
 
         if not self.validation:
-            self.index = full_index[:split_idx]
+            self.segment_indices = full_index[:split_idx]
         else:
-            self.index = full_index[split_idx:]
+            self.segment_indices = full_index[split_idx:]
 
-        printf("segments ready to load:", len(self.index))
+        printf("segments ready to load:", len(self.segment_indices))
 
     def __len__(self):
-        return len(self.index)
+        return len(self.segment_indices)
 
     def __iter__(self):
 
         # shuffle data subset after each epoch
         if self.shuffle:
             rng = np.random.default_rng(self.seed)
-            rng.shuffle(self.index)
+            rng.shuffle(self.segment_indices)
 
-        for segment_idx in self.index:
+        # support single & multi-processing
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
 
-            self.video = cv2.VideoCapture(self.hevc_file_paths[segment_idx])
-            self.gts = h5py.File(self.gt_file_paths[segment_idx], 'r')
-            self.segment_length = self.gts['plans'].shape[0]
+        # print('worker_id:', worker_id)
+        # print('num_workers:', num_workers)
 
-            _, frame2 = self.video.read() # initialize last frame
+        # print('> seed shuffle should be same:', self.segment_indices[:10])
+        # print('> segment_vidx\'s should be different:', list(range(worker_id, len(self.segment_indices), num_workers))[:10])
+
+        for segment_vidx in range(worker_id, len(self.segment_indices), num_workers):
+
+            # retrieve true index of segment [0, 2331] using virtual index [0, 2331 * train_split]
+            segment_idx = self.segment_indices[segment_vidx]
+
+            segment_video = cv2.VideoCapture(self.hevc_file_paths[segment_idx])
+            segment_gts = h5py.File(self.gt_file_paths[segment_idx], 'r')
+            segment_length = segment_gts['plans'].shape[0]
+            n_seqs = math.floor(segment_length / self.seq_len)
+
+            _, frame2 = segment_video.read()  # initialize last frame
             yuv_frame2 = bgr_to_yuv(frame2)
-
-            n_seqs = math.floor(self.segment_length / self.seq_len)
 
             new_segment = True
 
             for sequence_idx in range(n_seqs):
 
-                if sequence_idx > 0: new_segment = False
+                if sequence_idx > 0:
+                    new_segment = False
 
                 stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
-                
-                # start iteration from 1
-                # to skip the 1st plan step which didn't see 2 stacked frames yet 
+
+                # start iteration from 1 because we already read 1 frame before
                 for t_idx in range(1, self.seq_len):
                     yuv_frame1 = yuv_frame2
-                    _, frame2 = self.video.read()
+                    _, frame2 = segment_video.read()
 
                     yuv_frame2 = bgr_to_yuv(frame2)
-
                     prepared_frames = transform_frames([yuv_frame1, yuv_frame2])
                     stacked_frames = np.vstack(prepared_frames).reshape(1, 12, 128, 256)
                     stacked_frame_seq[t_idx] = stacked_frames
 
-                abs_t_indices = slice(sequence_idx*self.seq_len, (sequence_idx+1)*self.seq_len)
-                gt_plan_seq = self.gts['plans'][abs_t_indices]
-                gt_plan_prob_seq = self.gts['plans_prob'][abs_t_indices]
+                # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
+                abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
+                gt_plan_seq = segment_gts['plans'][abs_t_indices]
+                gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                yield stacked_frame_seq, (gt_plan_seq, gt_plan_prob_seq), new_segment
+                printf(f'worker: {worker_id}, fetching segment: {segment_idx}, sequence: {sequence_idx}')
+                yield segment_idx, sequence_idx, new_segment
+                # yield stacked_frame_seq, (gt_plan_seq, gt_plan_prob_seq), new_segment
 
-            self.gts.close()
+            segment_gts.close()
 
         return
 
@@ -183,24 +204,71 @@ def get_paths(base_dir, min_segment_len=1190):
     return video_paths, gt_paths
 
 
+class BatchDataLoader:
+    def __init__(self, loader, batch_size):
+        self.loader = loader
+        self.batch_size = batch_size
+
+    def __iter__(self):
+        batch = []
+        for d in self.loader:
+            batch.append(d)
+            if len(batch) == self.batch_size:
+                yield self.collate_fn(batch)
+                batch.clear()
+        if len(batch) > 0:
+            yield self.collate_fn(batch)
+
+    def collate_fn(self, batch_items):
+        # this creates a copy and wastes memory
+        # possible solution: create a batch tensor in main process, share it with workers to fill in their slices (have to know batch shape)
+        return torch.tensor(batch_items).transpose(0, 1)
+
+    def __len__(self):
+        return len(self.loader)
+
+
 if __name__ == "__main__":
     comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    train_dataset = CommaLoader(comma_recordings_basedir, 0.8, shuffle=False)
-    valid_dataset = CommaLoader(comma_recordings_basedir, 0.8, shuffle=False, validation=True)
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=1, shuffle=False)
-    valid_loader = DataLoader(valid_dataset, batch_size=1, num_workers=1, shuffle=False)
+    batch_size = 10
+
+    # num_workers must be the same as `batch_size` for data loader to process different segments at the same rate (a forward path takes in input at the same step I in all M segments, instead of steps I±epsilon)
+    num_workers = 20
+    seq_len = 32
+    train_split = 0.8
+
+    train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True)
+
+    # hack to get workers work on samples instead of batches
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, shuffle=False, prefetch_factor=10)
+    train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
 
     printf("checking the shapes of the loader outs")
-    for idx, batch in enumerate(valid_loader):
-        frames, (plan, plan_prob), is_new_segment = batch
+    # print('train loader length:', len(train_loader))
+    prev_time = time.time()
+    for idx, batch in enumerate(train_loader):
+        segment_idx, sequence_idx, new_segment = batch
 
-        printf('Batch', idx)
-        printf('frames:', frames.shape)
-        printf('plan:', frames.shape)
-        printf('plan_prob:', frames.shape)
-        printf('is_new_segment:', frames.shape)
-        printf()
-        
-        if idx > 32 * 37:
-            break
+        new_time = time.time()
+        time_delta = new_time - prev_time
+        prev_time = new_time
+        printf(f'{time_delta:.3f}s - Segments: {segment_idx}. Sequence IDs (must be single): {torch.unique(sequence_idx)}. New segment? (must be single) {torch.unique(new_segment)}')
+        # frames, (plan, plan_prob), is_new_segment = batch
+
+        if idx == 0:
+            printf('Giving time to pre-fetch...')
+            time.sleep(15)
+
+        printf('Simulating forward+back prop...')
+        time.sleep(0.5)
+
+        # printf('Batch', idx)
+        # printf('frames:', frames.shape)
+        # printf('plan:', frames.shape)
+        # printf('plan_prob:', frames.shape)
+        # printf('is_new_segment:', frames.shape)
+        # printf()
+
+        # if idx > 32 * 50:
+        #     break
