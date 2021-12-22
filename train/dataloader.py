@@ -110,7 +110,7 @@ class CommaLoader(IterableDataset):
                 if sequence_idx > 0:
                     new_segment = False
 
-                stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
+                # stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
 
                 # start iteration from 1 because we already read 1 frame before
                 for t_idx in range(1, self.seq_len):
@@ -120,15 +120,21 @@ class CommaLoader(IterableDataset):
                     yuv_frame2 = bgr_to_yuv(frame2)
                     prepared_frames = transform_frames([yuv_frame1, yuv_frame2])
                     stacked_frames = np.vstack(prepared_frames).reshape(1, 12, 128, 256)
-                    stacked_frame_seq[t_idx] = stacked_frames
+
+                    abs_t_idx = sequence_idx*self.seq_len + t_idx
+                    gt_plan = segment_gts['plans'][abs_t_idx]
+                    gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
+
+                    yield segment_idx, sequence_idx, t_idx, new_segment
+                    # yield stacked_frames, gt_plan, gt_plan_prob, new_segment
 
                 # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
-                abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
-                gt_plan_seq = segment_gts['plans'][abs_t_indices]
-                gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
+                # abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
+                # gt_plan_seq = segment_gts['plans'][abs_t_indices]
+                # gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                printf(f'worker: {worker_id}, fetching segment: {segment_idx}, sequence: {sequence_idx}')
-                yield segment_idx, sequence_idx, new_segment
+                # printf(f'worker: {worker_id}, fetching segment: {segment_idx}, sequence: {sequence_idx}')
+                # yield segment_idx, sequence_idx, new_segment
                 # yield stacked_frame_seq, (gt_plan_seq, gt_plan_prob_seq), new_segment
 
             segment_gts.close()
@@ -234,34 +240,34 @@ if __name__ == "__main__":
     batch_size = 10
 
     # num_workers must be the same as `batch_size` for data loader to process different segments at the same rate (a forward path takes in input at the same step I in all M segments, instead of steps I±epsilon)
-    num_workers = 20
+    num_workers = 13
     seq_len = 32
     train_split = 0.8
 
     train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True)
 
     # hack to get workers work on samples instead of batches
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, shuffle=False, prefetch_factor=10)
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, shuffle=False, prefetch_factor=32)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
 
     printf("checking the shapes of the loader outs")
     # print('train loader length:', len(train_loader))
     prev_time = time.time()
     for idx, batch in enumerate(train_loader):
-        segment_idx, sequence_idx, new_segment = batch
+        segment_idx, sequence_idx, t_idx, new_segment = batch
 
         new_time = time.time()
         time_delta = new_time - prev_time
         prev_time = new_time
-        printf(f'{time_delta:.3f}s - Segments: {segment_idx}. Sequence IDs (must be single): {torch.unique(sequence_idx)}. New segment? (must be single) {torch.unique(new_segment)}')
+        printf(f'{time_delta:.3f}s - Segments: {segment_idx}. Sequences: {torch.unique(sequence_idx)}. Timesteps: {torch.unique(t_idx)}. New segment? {torch.unique(new_segment)}')
         # frames, (plan, plan_prob), is_new_segment = batch
 
         if idx == 0:
             printf('Giving time to pre-fetch...')
-            time.sleep(15)
+            time.sleep(10)
 
         printf('Simulating forward+back prop...')
-        time.sleep(0.5)
+        time.sleep(0.1)
 
         # printf('Batch', idx)
         # printf('frames:', frames.shape)
