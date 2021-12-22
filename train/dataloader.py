@@ -127,7 +127,7 @@ class CommaLoader(IterableDataset):
 
                     # printf(f'worker {worker_id}. segment {segment_idx}. sequence id {sequence_idx}. timestep {t_idx}. new segment {new_segment}')
                     # yield segment_idx, sequence_idx, t_idx, new_segment
-                    yield stacked_frames, gt_plan, gt_plan_prob, new_segment
+                    yield stacked_frames, gt_plan, gt_plan_prob, new_segment  # FIXME: this never worked! (with BatchDataLoader)
 
                 # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
                 # abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
