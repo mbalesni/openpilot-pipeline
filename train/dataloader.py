@@ -9,6 +9,8 @@ import cv2
 import math
 import torch
 import time
+from timing import Timing
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa
 from utils import bgr_to_yuv, transform_frames, printf  # noqa
@@ -71,6 +73,8 @@ class CommaLoader(IterableDataset):
 
     def __iter__(self):
 
+        timing = dict()
+
         # shuffle data subset after each epoch
         if self.shuffle:
             rng = np.random.default_rng(self.seed)
@@ -97,45 +101,79 @@ class CommaLoader(IterableDataset):
 
             _, frame2 = segment_video.read()  # initialize last frame
             yuv_frame2 = bgr_to_yuv(frame2)
+            
+            # TODO: check if model can handle images pre-processed through (shorter) path2.
+            # path1 and path2 look identical when saved to a PNG, but have some 
+            # structured differences (to see, print the flattened difference between the two)
 
+            # path1: bgr -> yuv -> rgb
+            # path2: bgr -> rgb
+            # path1 = yuv_to_rgb(bgr_to_yuv(frame2))
+            # path2 = bgr_to_rgb(frame2)
+            # print('diff between paths:', list((path1 - path2).flatten()))
 
             for sequence_idx in range(n_seqs):
+
+                start_time = time.time()
 
                 segment_finished = sequence_idx == n_seqs-1
 
                 if not self.single_frame_batches:
-                    stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
+                    yuv_frame_seq = np.zeros((self.seq_len+1, 1311, 1164), dtype=np.uint8)
+                    yuv_frame_seq[0] = yuv_frame2
+
 
                 # start iteration from 1 because we already read 1 frame before
-                for t_idx in range(1, self.seq_len):
-
+                for t_idx in range(1, self.seq_len+1):
                     sequence_finished = t_idx == self.seq_len-1
 
                     yuv_frame1 = yuv_frame2
-                    _, frame2 = segment_video.read()
+                    with Timing(timing, f'read_frame-{worker_id}'):
+                        _, frame2 = segment_video.read()
 
-                    yuv_frame2 = bgr_to_yuv(frame2)
-                    prepared_frames = transform_frames([yuv_frame1, yuv_frame2])
-                    stacked_frames = np.vstack(prepared_frames).reshape(12, 128, 256)
+                    with Timing(timing, f'yuv_convert-{worker_id}'):
+                        yuv_frame2 = bgr_to_yuv(frame2)
+
+                    with Timing(timing, f'transform_frames_total-{worker_id}'):
+                        if self.single_frame_batches:
+                            prepared_frames = transform_frames([yuv_frame1, yuv_frame2], timing)
+                        else: 
+                            yuv_frame_seq[t_idx] = yuv_frame2
 
                     if self.single_frame_batches:
+                        with Timing(timing, f'stack_frames-{worker_id}'):
+                            stacked_frames = np.vstack(prepared_frames).reshape(12, 128, 256)
+
                         abs_t_idx = sequence_idx*self.seq_len + t_idx
                         gt_plan = segment_gts['plans'][abs_t_idx]
                         gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
 
                         yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
-                    else:
-                        stacked_frame_seq[t_idx-1, ...] = stacked_frames
 
                 if not self.single_frame_batches:
+                    with Timing(timing, f'transform_frames_total-{worker_id}'):
+                        prepared_frames = transform_frames(yuv_frame_seq, timing)
+                        # print('prepared_frames', prepared_frames.shape)
+
+                    with Timing(timing, f'stack_frames-{worker_id}'):
+                        stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
+                        for i in range(self.seq_len):
+                            stacked_frame_seq[i] = np.vstack(prepared_frames[i:i+2])[None].reshape(12, 128, 256)
+
                     # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
                     abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
                     gt_plan_seq = segment_gts['plans'][abs_t_indices]
                     gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                    # yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True
-                    print(f'worker: {worker_id}, segment: {segment_idx}, seq: {sequence_idx}')
-                    yield segment_idx, sequence_idx, segment_finished, True, True
+                    delta_time = time.time() - start_time
+
+                    print('delta time:', delta_time)
+
+                    timing[f'sequence_total-{worker_id}'] = {'time': delta_time, 'count': 1}
+
+                    yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, timing
+                    # print(f'worker: {worker_id}, segment: {segment_idx}, seq: {sequence_idx}, time: {time.time() - start_time:.2f}s')
+                    # yield segment_idx, sequence_idx, segment_finished, True, True, timing
 
             segment_gts.close()
 
@@ -225,17 +263,49 @@ class BatchDataLoader:
             yield self.collate_fn(batch)
 
     def collate_fn(self, batch):
+        # TODO: fix shapes for sequence batches
+        start_time = time.time()
 
         stacked_frames = torch.stack([item[0] for item in batch])
         gt_plan = torch.stack([item[1] for item in batch])
         gt_plan_prob = torch.stack([item[2] for item in batch])
-        segment_finished = torch.stack([item[3] for item in batch])
-        sequence_finished = torch.stack([item[4] for item in batch])
+        segment_finished = torch.tensor([item[3] for item in batch])
+        sequence_finished = torch.tensor([item[4] for item in batch])
+        timings = [item[5] for item in batch]
+        
+        delta_time = time.time() - start_time
+        timings.append({'collate_fn': {'time': delta_time, 'count': 1}})
+        # print(f'collate_fn: {time.time() - start_time:.2f}s')
 
-        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
+        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, timings
 
     def __len__(self):
         return len(self.loader)
+
+
+def merge_timings(arr):
+	"""
+	Merge timings from different runs.
+
+	Args:
+		arr (list): list of dicts with timings
+
+	Returns:
+		dict: merged timings
+	"""
+	merged = {}
+	for item in arr:
+		for key, value in item.items():
+			if key not in merged:
+				merged[key] = {'time': 0, 'count': 0}
+			merged[key]['time'] += value['time']
+			merged[key]['count'] += value['count']
+	return merged
+
+def pprint_timing(merged_timings, batch_size):
+
+	for key, value in merged_timings.items():
+		print('{}: {:.2f}s'.format(key, value['time'] / value['count']))
 
 
 if __name__ == "__main__":
@@ -248,7 +318,7 @@ if __name__ == "__main__":
     # (ONLY FOR sequence batches) 
     # num_workers must be the same as `batch_size` for data loader to process different segments 
     # at the same rate (a forward path takes in input at the same step I in all M segments, instead of steps I±epsilon)
-    num_workers = 30
+    num_workers = 10
     seq_len = 100
     simulated_forward_time = 1.000  # 100 milli-seconds for a single-frame batch (M, 1, 12, 128, 256)
     batch_size = 10
@@ -258,20 +328,25 @@ if __name__ == "__main__":
     train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
 
     # hack to get batches of different segments with many workers
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, shuffle=False, prefetch_factor=8)
+    train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=8, collate_fn=None)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
+
+    
+    timings = []
 
     printf("checking the shapes of the loader outs")
     prev_time = time.time()
     for idx, batch in enumerate(train_loader):
-        # frames, plans, plans_probs, segment_finished, sequence_finished = batch
-        segment, sequence, segment_finished, sequence_finished, _ = batch
+        frames, plans, plans_probs, segment_finished, sequence_finished, timing = batch
+        # segment, sequence, segment_finished, sequence_finished, _, timing = batch
+
+        timings += timing
 
         if idx == 0:
             new_time = time.time()
             time_delta = new_time - prev_time - simulated_forward_time
-            printf('Giving 20s to pre-fetch...')
-            time.sleep(20)
+            # printf('Giving 20s to pre-fetch...')
+            # time.sleep(20)
 
             # recalculate
             new_time = time.time()
@@ -281,11 +356,14 @@ if __name__ == "__main__":
             time_delta = new_time - prev_time - simulated_forward_time
             prev_time = new_time
 
-        printf(f'{time_delta:.3f}s - Segments: {torch.unique(segment)}. Plans: {torch.unique(sequence)}. Segment finished: {torch.unique(segment_finished)}. Sequence finished: {torch.unique(sequence_finished)}')
-        # printf(f'{time_delta:.3f}s - Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
+        # printf(f'{time_delta:.3f}s - {batch_size * seq_len} frames ({batch_size * seq_len / time_delta} fps). Segments: {torch.unique(segment)}. Plans: {torch.unique(sequence)}. Segment finished: {torch.unique(segment_finished)}. Sequence finished: {torch.unique(sequence_finished)}')
+        printf(f'{time_delta:.3f}s - {batch_size * seq_len} frames ({batch_size * seq_len / time_delta} fps). Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
 
         time.sleep(simulated_forward_time)
 
-        if idx > 100:
+        if idx > 5:
             break
+
+    timings_combined = merge_timings(timings)
+    pprint_timing(timings_combined, batch_size)
 

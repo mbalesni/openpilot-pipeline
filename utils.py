@@ -5,6 +5,7 @@ import numpy as np
 import math
 import os
 import cv2
+from timing import Timing
 #from tools.lib.logreader import LogReader
 
 
@@ -34,12 +35,20 @@ def transform_img(base_img,
                   yuv=False,
                   alpha=1.0,
                   beta=0,
-                  blur=0):
-    import cv2  # pylint: disable=import-error
+                  blur=0,
+                  timing=dict()):
+    # import cv2  # pylint: disable=import-error
     cv2.setNumThreads(1)
 
-    if yuv:
-        base_img = cv2.cvtColor(base_img, cv2.COLOR_YUV2RGB_I420)
+
+    with Timing(timing, 'transform_convert_to_rgb'):
+        if yuv:
+            base_img = cv2.cvtColor(base_img, cv2.COLOR_YUV2RGB_I420)
+
+    # with Timing(timing, 'transform_convert_bgr_to_rgb'):
+    #     if yuv:
+    #         # convert bgr to rgb
+    #         base_img = cv2.cvtColor(base_img, cv2.COLOR_BGR2RGB)
 
     size = base_img.shape[:2]
     if not output_size:
@@ -49,9 +58,9 @@ def transform_img(base_img,
 
     def get_M(h=1.22):
         quadrangle = np.array([[0, cy + 20],
-                               [size[1]-1, cy + 20],
-                               [0, size[0]-1],
-                               [size[1]-1, size[0]-1]], dtype=np.float32)
+                            [size[1]-1, cy + 20],
+                            [0, size[0]-1],
+                            [size[1]-1, size[0]-1]], dtype=np.float32)
         quadrangle_norm = np.hstack((normalize(quadrangle, intrinsics=from_intr), np.ones((4, 1))))
         quadrangle_world = np.column_stack((h*quadrangle_norm[:, 0]/quadrangle_norm[:, 1],
                                             h*np.ones(4),
@@ -61,14 +70,15 @@ def transform_img(base_img,
         to_KE = to_intr.dot(to_extrinsics)
         warped_quadrangle_full = np.einsum('jk,ik->ij', to_KE, np.hstack((quadrangle_world, np.ones((4, 1)))))
         warped_quadrangle = np.column_stack((warped_quadrangle_full[:, 0]/warped_quadrangle_full[:, 2],
-                                             warped_quadrangle_full[:, 1]/warped_quadrangle_full[:, 2])).astype(np.float32)
+                                            warped_quadrangle_full[:, 1]/warped_quadrangle_full[:, 2])).astype(np.float32)
         M = cv2.getPerspectiveTransform(quadrangle, warped_quadrangle.astype(np.float32))
         return M
 
     M = get_M()
     if pretransform is not None:
         M = M.dot(pretransform)
-    augmented_rgb = cv2.warpPerspective(base_img, M, output_size, borderMode=cv2.BORDER_REPLICATE)
+    with Timing(timing, 'transform_warpPerspective'):
+        augmented_rgb = cv2.warpPerspective(base_img, M, output_size, borderMode=cv2.BORDER_REPLICATE)
 
     if top_hacks:
         cyy = int(math.ceil(to_intr[1, 2]))
@@ -77,17 +87,22 @@ def transform_img(base_img,
             M = M.dot(pretransform)
         augmented_rgb[:cyy] = cv2.warpPerspective(base_img, M, (output_size[0], cyy), borderMode=cv2.BORDER_REPLICATE)
 
-    # brightness and contrast augment
-    augmented_rgb = np.clip((float(alpha)*augmented_rgb + beta), 0, 255).astype(np.uint8)
+    # print('before clip:', augmented_rgb.shape, augmented_rgb.dtype, np.min(augmented_rgb), np.max(augmented_rgb))
+    # # brightness and contrast augment
+    # with Timing(timing, 'transform_clip_brightness'):
+    #     augmented_rgb = np.clip((float(alpha)*augmented_rgb + beta), 0, 255).astype(np.uint8)
 
+    # print('after clip:', augmented_rgb.shape, augmented_rgb.dtype)
     # gaussian blur
     if blur > 0:
         augmented_rgb = cv2.GaussianBlur(augmented_rgb, (blur*2+1, blur*2+1), cv2.BORDER_DEFAULT)
 
-    if yuv:
-        augmented_img = cv2.cvtColor(augmented_rgb, cv2.COLOR_RGB2YUV_I420)
-    else:
-        augmented_img = augmented_rgb
+    with Timing(timing, 'transform_convert_to_yuv'):
+        if yuv:
+            augmented_img = cv2.cvtColor(augmented_rgb, cv2.COLOR_RGB2YUV_I420)
+        else:
+            augmented_img = augmented_rgb
+    # print('after convert to yuv:', augmented_rgb.shape, augmented_rgb.dtype)
     return augmented_img
 
 
@@ -131,20 +146,36 @@ def load_calibration(segment_path):
 
 def bgr_to_yuv(img_bgr):
     img_yuv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YUV_I420)
-    img_yuv = img_yuv.reshape((874*3//2, 1164))
+    assert img_yuv.shape == ((874*3//2, 1164))
     return img_yuv
 
 
-def transform_frames(frames):
+def bgr_to_rgb(bgr):
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def yuv_to_rgb(yuv):
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB_I420)
+
+
+def rgb_to_yuv(rgb):
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
+
+
+def transform_frames(frames, timing):
     imgs_med_model = np.zeros((len(frames), 384, 512), dtype=np.uint8)
     for i, img in enumerate(frames):
         imgs_med_model[i] = transform_img(img, 
                                           from_intr=eon_intrinsics,
                                           to_intr=medmodel_intrinsics, 
                                           yuv=True,
-                                          output_size=(512, 256))
+                                          output_size=(512, 256),
+                                          timing=timing)
 
-    return np.array(reshape_yuv(imgs_med_model)).astype(np.float32)
+    with Timing(timing, 'reshape_yuv'):
+        reshaped = reshape_yuv(imgs_med_model)
+
+    return reshaped
 
 
 def get_train_imgs(path_to_segment, video_file='fcamera.hevc', gt_file='ground_truths.npz'):
