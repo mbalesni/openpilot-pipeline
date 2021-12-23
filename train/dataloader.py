@@ -41,6 +41,7 @@ class CommaLoader(IterableDataset):
         self.shuffle = shuffle
         self.seq_len = seq_len
         self.seed = seed
+        self.single_frame_batches = single_frame_batches
 
         if self.recordings_basedir is None or not os.path.exists(self.recordings_basedir):
             raise TypeError("recordings path is wrong")
@@ -84,12 +85,6 @@ class CommaLoader(IterableDataset):
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
 
-        # print('worker_id:', worker_id)
-        # print('num_workers:', num_workers)
-
-        # print('> seed shuffle should be same:', self.segment_indices[:10])
-        # print('> segment_vidx\'s should be different:', list(range(worker_id, len(self.segment_indices), num_workers))[:10])
-
         for segment_vidx in range(worker_id, len(self.segment_indices), num_workers):
 
             # retrieve true index of segment [0, 2331] using virtual index [0, 2331 * train_split]
@@ -103,40 +98,44 @@ class CommaLoader(IterableDataset):
             _, frame2 = segment_video.read()  # initialize last frame
             yuv_frame2 = bgr_to_yuv(frame2)
 
-            new_segment = True
 
             for sequence_idx in range(n_seqs):
 
-                if sequence_idx > 0:
-                    new_segment = False
+                segment_finished = sequence_idx == n_seqs-1
 
-                # stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
+                if not self.single_frame_batches:
+                    stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
 
                 # start iteration from 1 because we already read 1 frame before
                 for t_idx in range(1, self.seq_len):
+
+                    sequence_finished = t_idx == self.seq_len-1
+
                     yuv_frame1 = yuv_frame2
                     _, frame2 = segment_video.read()
 
                     yuv_frame2 = bgr_to_yuv(frame2)
                     prepared_frames = transform_frames([yuv_frame1, yuv_frame2])
-                    stacked_frames = np.vstack(prepared_frames).reshape(1, 12, 128, 256)
+                    stacked_frames = np.vstack(prepared_frames).reshape(12, 128, 256)
 
-                    abs_t_idx = sequence_idx*self.seq_len + t_idx
-                    gt_plan = segment_gts['plans'][abs_t_idx]
-                    gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
+                    if self.single_frame_batches:
+                        abs_t_idx = sequence_idx*self.seq_len + t_idx
+                        gt_plan = segment_gts['plans'][abs_t_idx]
+                        gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
 
-                    # printf(f'worker {worker_id}. segment {segment_idx}. sequence id {sequence_idx}. timestep {t_idx}. new segment {new_segment}')
-                    # yield segment_idx, sequence_idx, t_idx, new_segment
-                    yield stacked_frames, gt_plan, gt_plan_prob, new_segment  # FIXME: this never worked! (with BatchDataLoader)
+                        yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
+                    else:
+                        stacked_frame_seq[t_idx-1, ...] = stacked_frames
 
-                # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
-                # abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
-                # gt_plan_seq = segment_gts['plans'][abs_t_indices]
-                # gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
+                if not self.single_frame_batches:
+                    # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
+                    abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
+                    gt_plan_seq = segment_gts['plans'][abs_t_indices]
+                    gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                # printf(f'worker: {worker_id}, fetching segment: {segment_idx}, sequence: {sequence_idx}')
-                # yield segment_idx, sequence_idx, new_segment
-                # yield stacked_frame_seq, (gt_plan_seq, gt_plan_prob_seq), new_segment
+                    # yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True
+                    print(f'worker: {worker_id}, segment: {segment_idx}, seq: {sequence_idx}')
+                    yield segment_idx, sequence_idx, segment_finished, True, True
 
             segment_gts.close()
 
@@ -181,7 +180,6 @@ def get_paths(base_dir, min_segment_len=1190):
 
         for segment_dir in tqdm(segment_dirs):
 
-            # TODO: wasn't tested after switch to `plan.h5` from npz files
             gt_file_path = os.path.join(segment_dir, gt_filename)
             if not os.path.exists(gt_file_path):
                 printf(f'WARNING: not found plan.h5 file in segment: {segment_dir}')
@@ -226,14 +224,15 @@ class BatchDataLoader:
         if len(batch) > 0:
             yield self.collate_fn(batch)
 
-    def collate_fn(self, batch_items):
-        printf('batch size:', len(batch_items))
-        printf('len first elem:', len(batch_items[0]))
-        # printf('shape first elem:', batch_items[0].shape)
-        # this creates a copy and wastes memory
-        # possible solution: create a batch tensor in main process, share it with workers to fill in their slices (have to know batch shape)
-        return torch.stack(batch_items)
-        # return torch.tensor(batch_items).transpose(0, 1)
+    def collate_fn(self, batch):
+
+        stacked_frames = torch.stack([item[0] for item in batch])
+        gt_plan = torch.stack([item[1] for item in batch])
+        gt_plan_prob = torch.stack([item[2] for item in batch])
+        segment_finished = torch.stack([item[3] for item in batch])
+        sequence_finished = torch.stack([item[4] for item in batch])
+
+        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
 
     def __len__(self):
         return len(self.loader)
@@ -245,51 +244,48 @@ if __name__ == "__main__":
     else:
         comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    SIMULATED_FORWARD_PASS_TIME = 0.100  # 100 milli-seconds for a single-frame batch (M, 1, 12, 128, 256)
 
-    batch_size = 5
-
-    # num_workers must be the same as `batch_size` for data loader to process different segments at the same rate (a forward path takes in input at the same step I in all M segments, instead of steps I±epsilon)
-    num_workers = 20
+    # (ONLY FOR sequence batches) 
+    # num_workers must be the same as `batch_size` for data loader to process different segments 
+    # at the same rate (a forward path takes in input at the same step I in all M segments, instead of steps I±epsilon)
+    num_workers = 30
     seq_len = 100
+    simulated_forward_time = 1.000  # 100 milli-seconds for a single-frame batch (M, 1, 12, 128, 256)
+    batch_size = 10
     train_split = 0.8
+    single_frame_batches = False
 
-    train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True)
+    train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
 
-    # hack to get workers work on samples instead of batches
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, shuffle=False, prefetch_factor=32)
+    # hack to get batches of different segments with many workers
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, shuffle=False, prefetch_factor=8)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
 
     printf("checking the shapes of the loader outs")
-    # print('train loader length:', len(train_loader))
     prev_time = time.time()
     for idx, batch in enumerate(train_loader):
-        segment_idx, sequence_idx, t_idx, new_segment = batch
-
-        printf('segment idx:', segment_idx.shape)
-        printf('sequence idx:', sequence_idx.shape)
-        printf('t_idx:', t_idx.shape)
-        printf('new_segment:', new_segment.shape)
-
-        new_time = time.time()
-        time_delta = new_time - prev_time
-        prev_time = new_time
-        printf(f'{time_delta:.3f}s - Segments: {segment_idx}. Sequences: {torch.unique(sequence_idx)}. Timesteps: {torch.unique(t_idx)}. New segment? {torch.unique(new_segment)}')
-        # frames, (plan, plan_prob), is_new_segment = batch
+        # frames, plans, plans_probs, segment_finished, sequence_finished = batch
+        segment, sequence, segment_finished, sequence_finished, _ = batch
 
         if idx == 0:
-            printf('Giving time to pre-fetch...')
-            time.sleep(10)
+            new_time = time.time()
+            time_delta = new_time - prev_time - simulated_forward_time
+            printf('Giving 20s to pre-fetch...')
+            time.sleep(20)
 
-        # printf('Simulating forward+back prop...')
-        time.sleep(SIMULATED_FORWARD_PASS_TIME)
+            # recalculate
+            new_time = time.time()
+            prev_time = new_time
+        else:
+            new_time = time.time()
+            time_delta = new_time - prev_time - simulated_forward_time
+            prev_time = new_time
 
-        # printf('Batch', idx)
-        # printf('frames:', frames.shape)
-        # printf('plan:', frames.shape)
-        # printf('plan_prob:', frames.shape)
-        # printf('is_new_segment:', frames.shape)
-        # printf()
+        printf(f'{time_delta:.3f}s - Segments: {torch.unique(segment)}. Plans: {torch.unique(sequence)}. Segment finished: {torch.unique(segment_finished)}. Sequence finished: {torch.unique(sequence_finished)}')
+        # printf(f'{time_delta:.3f}s - Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
 
-        # if idx > 32 * 50:
-        #     break
+        time.sleep(simulated_forward_time)
+
+        if idx > 100:
+            break
+
