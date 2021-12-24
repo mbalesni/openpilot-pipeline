@@ -11,6 +11,10 @@ import torch
 import time
 from timing import Timing
 import matplotlib.pyplot as plt
+import threading
+import subprocess
+
+
 
 
 
@@ -52,7 +56,7 @@ class CommaLoader(IterableDataset):
 
         self.hevc_file_paths, self.gt_file_paths = get_paths(self.recordings_basedir, min_segment_len=MIN_SEGMENT_LENGTH)
         n_segments = len(self.hevc_file_paths)
-        printf("# of segments", n_segments)
+        printf("Total # segments", n_segments)
 
         full_index = list(range(n_segments))
 
@@ -68,7 +72,7 @@ class CommaLoader(IterableDataset):
         else:
             self.segment_indices = full_index[split_idx:]
 
-        printf("segments ready to load:", len(self.segment_indices))
+        printf("Subset # segments:", len(self.segment_indices))
 
     def __len__(self):
         return len(self.segment_indices)
@@ -91,7 +95,14 @@ class CommaLoader(IterableDataset):
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
 
+        worker_pid = os.getpid()
+        cores_per_worker = os.cpu_count() // num_workers
+
+        # force the process to be gentle, i.e. use no more than `cores_per_worker` cores instead of all
+        subprocess.check_output(f'taskset -pc {worker_id*cores_per_worker}-{worker_id*cores_per_worker+cores_per_worker-1} {worker_pid}', shell=True)
+
         for segment_vidx in range(worker_id, len(self.segment_indices), num_workers):
+        # for segment_vidx in range(worker_id, num_workers, num_workers):
 
             # retrieve true index of segment [0, 2331] using virtual index [0, 2331 * train_split]
             segment_idx = self.segment_indices[segment_vidx]
@@ -112,7 +123,7 @@ class CommaLoader(IterableDataset):
             # path2: bgr -> rgb
             # path1 = yuv_to_rgb(bgr_to_yuv(frame2))
             # path2 = bgr_to_rgb(frame2)
-            # print('diff between paths:', list((path1 - path2).flatten()))
+            # printf('diff between paths:', list((path1 - path2).flatten()))
 
             for sequence_idx in range(n_seqs):
 
@@ -121,12 +132,12 @@ class CommaLoader(IterableDataset):
                 segment_finished = sequence_idx == n_seqs-1
 
                 if not self.single_frame_batches:
-                    yuv_frame_seq = np.zeros((self.seq_len+1, 1311, 1164), dtype=np.uint8)
+                    yuv_frame_seq = np.zeros((self.seq_len, 1311, 1164), dtype=np.uint8)
                     yuv_frame_seq[0] = yuv_frame2
 
 
                 # start iteration from 1 because we already read 1 frame before
-                for t_idx in range(1, self.seq_len+1):
+                for t_idx in range(1, self.seq_len):  # FIXME: +1?
                     sequence_finished = t_idx == self.seq_len-1
 
                     yuv_frame1 = yuv_frame2
@@ -150,16 +161,16 @@ class CommaLoader(IterableDataset):
                         gt_plan = segment_gts['plans'][abs_t_idx]
                         gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
 
-                        yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
+                        yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, worker_id
 
                 if not self.single_frame_batches:
                     with Timing(timing, f'transform_frames_total-{worker_id}'):
                         prepared_frames = transform_frames(yuv_frame_seq, timing)
-                        # print('prepared_frames', prepared_frames.shape)
+                        # printf('prepared_frames', prepared_frames.shape)
 
                     with Timing(timing, f'stack_frames-{worker_id}'):
-                        stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
-                        for i in range(self.seq_len):
+                        stacked_frame_seq = np.zeros((self.seq_len-1, 12, 128, 256), dtype=np.uint8)
+                        for i in range(self.seq_len-1):
                             stacked_frame_seq[i] = np.vstack(prepared_frames[i:i+2])[None].reshape(12, 128, 256)
 
                     # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
@@ -169,13 +180,15 @@ class CommaLoader(IterableDataset):
 
                     delta_time = time.time() - start_time
 
-                    # print('delta time:', delta_time)
+                    if 'sequence_total' not in timing:
+                        timing['sequence_total'] = {'time': 0, 'count': 0}
+                    timing['sequence_total']['time'] += delta_time
+                    timing['sequence_total']['count'] += self.seq_len
 
-                    timing[f'sequence_total-{worker_id}'] = {'time': delta_time, 'count': 1}
+                    # yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, worker_id
 
-                    yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, timing
-                    # print(f'worker: {worker_id}, segment: {segment_idx}, seq: {sequence_idx}, time: {time.time() - start_time:.2f}s')
-                    # yield segment_idx, sequence_idx, segment_finished, True, True, timing
+                    # printf(f'worker: {worker_id}, segment: {segment_idx}, seq: {sequence_idx}, time: {time.time() - start_time:.2f}s')
+                    yield segment_idx, sequence_idx, segment_finished, True, True, worker_id
 
             segment_gts.close()
 
@@ -250,36 +263,49 @@ def get_paths(base_dir, min_segment_len=1190):
 
 
 class BatchDataLoader:
+    '''Assumes batch_size == num_workers to ensure same ordering of segments in each batch'''
+
     def __init__(self, loader, batch_size):
         self.loader = loader
         self.batch_size = batch_size
 
+    # TODO: test this running through the full dataset
     def __iter__(self):
-        batch = []
+        bs = self.batch_size
+        batch = [None] * bs
+        current_bs = 0
+        workers_seen = set()
         for d in self.loader:
-            batch.append(d)
-            if len(batch) == self.batch_size:
-                yield self.collate_fn(batch)
-                batch.clear()
-        if len(batch) > 0:
-            yield self.collate_fn(batch)
+            worker_id = d[-1]
+
+            # this means there're fewer segments left than the size of the batch — drop the last ones
+            if worker_id in workers_seen:
+                printf(f'Error: sequence from worker:{worker_id} already seen in this batch, dropping batch. Either a worker was too fast or there\'re fewer segments left than the batch size.')
+                return  # FIXME: think about how to handle this case
+
+            batch[worker_id] = d
+            current_bs += 1
+            workers_seen.add(worker_id)
+
+            if current_bs == bs:
+                collated_batch = self.collate_fn(batch)
+                yield collated_batch
+                batch = [None] * bs
+                current_bs = 0
+                workers_seen = set()
+
+        # drop non-full batches
+        return
 
     def collate_fn(self, batch):
-        # TODO: fix shapes for sequence batches
-        start_time = time.time()
 
-        stacked_frames = torch.stack([item[0] for item in batch])
-        gt_plan = torch.stack([item[1] for item in batch])
-        gt_plan_prob = torch.stack([item[2] for item in batch])
+        stacked_frames = torch.tensor([item[0] for item in batch])
+        gt_plan = torch.tensor([item[1] for item in batch])
+        gt_plan_prob = torch.tensor([item[2] for item in batch])
         segment_finished = torch.tensor([item[3] for item in batch])
         sequence_finished = torch.tensor([item[4] for item in batch])
-        timings = [item[5] for item in batch]
-        
-        delta_time = time.time() - start_time
-        timings.append({'collate_fn': {'time': delta_time, 'count': 1}})
-        # print(f'collate_fn: {time.time() - start_time:.2f}s')
 
-        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, timings
+        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
 
     def __len__(self):
         return len(self.loader)
@@ -307,121 +333,150 @@ def merge_timings(arr):
 def pprint_timing(merged_timings, batch_size):
 
 	for key, value in merged_timings.items():
-		print('{}: {:.2f}s'.format(key, value['time'] / value['count']))
+		printf('{}: {:.2f}s'.format(key, value['time'] / value['count']))
+
+
+class BackgroundGenerator(threading.Thread):
+    def __init__(self, generator):
+        threading.Thread.__init__(self)
+        self.queue = torch.multiprocessing.Queue(2)
+        self.generator = generator
+        self.daemon = True
+        self.start()
+
+    def run(self):
+        for item in self.generator:
+            self.queue.put(item)
+        self.queue.put(None)
+
+    def __iter__(self):
+        try:
+            next_item = self.queue.get()
+            while next_item is not None:
+                yield next_item
+                next_item = self.queue.get()
+        except (ConnectionResetError, ConnectionRefusedError):
+            self.stop()
+            raise StopIteration
 
 
 if __name__ == "__main__":
+
     if len(sys.argv) >= 2:
         comma_recordings_basedir = sys.argv[1]
     else:
         comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
 
-    num_workers_histories = {}
+    model_fps_s = [400, 800, 1600]
+    # model_fps_s = [400, 600]
 
-    for i in [1, 8, 16, 30]:
-        num_workers_histories[i] = {
-            'batch_size': [],
-            'avg_fps': [],
-            'avg_seq_time': [],
-            'avg_fps_error': [],
-        }
+    log_template = {
+        'total_fps': [],
+        'total_fps_error': [],
+        'worker_fps': [],
+        'batch_size': [],
+    }
+    logs = {k: {
+        'total_fps': [],
+        'total_fps_error': [],
+        'worker_fps': [],
+        'batch_size': [],
+    } for k in model_fps_s}
 
-    for num_workers in [1, 8, 16, 30]:
-    # for num_workers in [0, 2]:
 
         
-        for batch_size in [1, 8, 16, 30]:
-        # for batch_size in [1, 4]:
+    for simulated_model_fps in model_fps_s:
+        # for batch_size in [8, 16]:
+        for batch_size in [8, 16, 30]:
 
-            print()
-            print(f'Test with {num_workers} workers | batch size: {batch_size}')
+            num_workers = batch_size
 
-            # num_workers = 10
-            # batch_size = 10
+            printf()
+            printf(f'Test with {num_workers} workers | batch size: {batch_size}')
+
             seq_len = 100
-            simulated_forward_time = 0.200
+            prefetch_factor = 2
+            prefetch_warmup_time = 2  # wait before starting iterating
+            simulated_forward_time = batch_size * seq_len / simulated_model_fps
+            printf(f'Simulated model FPS: {simulated_model_fps} ({simulated_forward_time:.2f}s)')
             train_split = 0.8
             single_frame_batches = False
 
-            # FIXME: order of sequences within a batch is random!
-            #
             # NOTE: num_workers corresponds to number of segments we are sampling from
+            #
             # so if we have num_workers=1, we are sampling from 1 segment at a time
             # if num_workers < batch_size, a batch will have several sequences from the same segments
             #   e.g. batch = [A1, B1, C1, A2, B2], num_workers=3, batch_size=5; A2 means sequence 2 from segment A
             # if num_workers > batch_size, consecutive batches will have sequences from different segments
             #   e.g. batch1 = [A1, B1, C1], batch2 = [D1, E1, A2], num_workers=5, batch_size=3;
             #
-            #  !!! so we need to keep num_workers == batch_size !!!
+            # !!! so need keep num_workers == batch_size !!!
             #
-            assert num_workers == batch_size, 'num_workers must be equal to batch_size, otherwise the data loader will not process different segments at the same time'
+            assert num_workers == batch_size, 'num_workers must be equal to batch_size, see comment above'
 
-            train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
 
             # hack to get batches of different segments with many workers
-            train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=2, collate_fn=None)
+            train_dataset = CommaLoader(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
+            train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor, collate_fn=None)
             train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
+            train_loader = BackgroundGenerator(train_loader)
 
             timings = []
             fps_history = []
+            fetch_delays = []
 
-            printf("checking the shapes of the loader outs")
+            printf("Starting loop (first batch will be slow)")
+            printf()
             prev_time = time.time()
             for idx, batch in enumerate(train_loader):
-                frames, plans, plans_probs, segment_finished, sequence_finished, timing = batch
-                # segment, sequence, segment_finished, sequence_finished, _, timing = batch
+                # frames, plans, plans_probs, segment_finished, sequence_finished = batch
+                segment, sequence, segment_finished, sequence_finished, _ = batch
 
-                timings += timing
+                time_delta = time.time() - prev_time
+                printf(f'{time_delta:.3f}s - {batch_size * seq_len} frames (FPS: {batch_size * seq_len // time_delta}). Segments: {torch.unique(segment)}. Sequence: {torch.unique(sequence)}. Segment finished: {torch.unique(segment_finished)}. Sequence finished: {torch.unique(sequence_finished)}')
+                # printf(f'{time_delta:.3f}s - {batch_size * seq_len} frames (FPS: {batch_size * seq_len // time_delta}). Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
 
                 if idx == 0:
-                    new_time = time.time()
-                    time_delta = new_time - prev_time - simulated_forward_time
-                    # printf('Giving 20s to pre-fetch...')
-                    # time.sleep(20)
+                    printf(f'Warming up pre-fetching {prefetch_warmup_time}s...')
+                    time.sleep(prefetch_warmup_time)
 
-                    # recalculate
-                    new_time = time.time()
-                    prev_time = new_time
-                else:
-                    new_time = time.time()
-                    time_delta = new_time - prev_time - simulated_forward_time
-                    prev_time = new_time
-
-                # printf(f'{time_delta:.3f}s - {batch_size * seq_len} frames ({batch_size * seq_len / time_delta} fps). Segments: {torch.unique(segment)}. Plans: {torch.unique(sequence)}. Segment finished: {torch.unique(segment_finished)}. Sequence finished: {torch.unique(sequence_finished)}')
                 fps = batch_size * seq_len / time_delta
                 fps_history.append(fps)
 
-                printf(f'{time_delta:.3f}s - {batch_size * seq_len} frames ({batch_size * seq_len / time_delta} fps). Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
-
+                # fake foward pass
                 time.sleep(simulated_forward_time)
 
-                if idx >= 4:
-                    break
+                prev_time = time.time()
 
-            timings_combined = merge_timings(timings)
-            avg_seq_time = timings_combined['sequence_total-0']['time'] / timings_combined['sequence_total-0']['count']
-            avg_fps = np.mean(fps_history)
-            avg_fps_error = np.std(fps_history)
-            print('AVG time per seq:', avg_seq_time)
-            # pprint_timing(timings_combined, batch_size)
+            # skip first batch, it's always slow (probably due to shuffling)
+            total_fps = np.mean(fps_history[1:])
+            total_fps_error = np.std(fps_history[1:])
 
-            num_workers_histories[num_workers]['batch_size'].append(batch_size)
-            num_workers_histories[num_workers]['avg_fps'].append(avg_fps)
-            num_workers_histories[num_workers]['avg_fps_error'].append(avg_fps_error)
-            num_workers_histories[num_workers]['avg_seq_time'].append(avg_seq_time)
+            print(f'Append to model_fps:{simulated_model_fps} total_fps:{total_fps} batch_size:{batch_size}')
+            logs[simulated_model_fps]['total_fps'].append(total_fps)
+            logs[simulated_model_fps]['total_fps_error'].append(total_fps_error)
+            logs[simulated_model_fps]['batch_size'].append(batch_size)
 
     # setup a wide figure
-    plt.figure(figsize=(16, 10))
-    plt.title(f'FPS history')
-    plt.xlabel('Batch size')
-    plt.ylabel('FPS')
+    fig, ax1 = plt.subplots(figsize=(16, 10))
 
-    for i, (num_workers, info) in enumerate(num_workers_histories.items()):
-        std_deviations = np.array(info['avg_fps_error'])
-        plt.plot(info['batch_size'], info['avg_fps'], label=f'{num_workers} workers ({info["avg_seq_time"][i]:.2f}s avg seq time)', linestyle='--', marker='o', markersize=10)
-        plt.fill_between(info['batch_size'], info['avg_fps'] - std_deviations, info['avg_fps'] + std_deviations, alpha=0.2)
+    fig.suptitle('Data Loader Throughput', fontsize=16)
+    ax1.set_title('Sequence length = 100', fontsize=12)
+    ax1.set_xlabel('Batch size = Num workers')
+    ax1.set_ylabel('FPS (frames per second)')
+    ax1.set_xticks(logs[list(logs.keys())[0]]['batch_size'])
+
+    for simulated_model_fps, log in logs.items():
+        print('printing sim fps:', simulated_model_fps)
+        stds_total_fps = np.array(log['total_fps_error'])
+
+        print('batches:', log['batch_size'])
+        print('total_fps:', log['total_fps'])
+
+        ax1.plot(log['batch_size'], log['total_fps'], linestyle='--', marker='o', markersize=10, label=f'Total throughpout @ simulated model FPS: {simulated_model_fps}')
+        ax1.fill_between(log['batch_size'], log['total_fps'] - stds_total_fps, log['total_fps'] + stds_total_fps, alpha=0.2)
 
     plt.legend()
-    plt.savefig('FPS vs num_workers.png')
+    plt.savefig('FPS vs batch_size.png')
 
