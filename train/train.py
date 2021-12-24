@@ -6,7 +6,7 @@ from tqdm import tqdm
 import torch 
 import torch.nn as nn
 import torch.optim as topt
-from dataloader import CommaLoader
+from dataloader import CommaLoader  # TODO: replace to CommaDataset
 from torch.utils.data import DataLoader
 from model import *
 from onnx2pytorch import ConvertModel
