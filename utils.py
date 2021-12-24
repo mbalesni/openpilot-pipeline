@@ -5,7 +5,6 @@ import numpy as np
 import math
 import os
 import cv2
-from timing import Timing
 #from tools.lib.logreader import LogReader
 
 
@@ -35,20 +34,12 @@ def transform_img(base_img,
                   yuv=False,
                   alpha=1.0,
                   beta=0,
-                  blur=0,
-                  timing=dict()):
+                  blur=0):
     # import cv2  # pylint: disable=import-error
     cv2.setNumThreads(1)
 
-
-    with Timing(timing, 'transform_convert_to_rgb'):
-        if yuv:
-            base_img = cv2.cvtColor(base_img, cv2.COLOR_YUV2RGB_I420)
-
-    # with Timing(timing, 'transform_convert_bgr_to_rgb'):
-    #     if yuv:
-    #         # convert bgr to rgb
-    #         base_img = cv2.cvtColor(base_img, cv2.COLOR_BGR2RGB)
+    if yuv:
+        base_img = cv2.cvtColor(base_img, cv2.COLOR_YUV2RGB_I420)
 
     size = base_img.shape[:2]
     if not output_size:
@@ -77,8 +68,7 @@ def transform_img(base_img,
     M = get_M()
     if pretransform is not None:
         M = M.dot(pretransform)
-    with Timing(timing, 'transform_warpPerspective'):
-        augmented_rgb = cv2.warpPerspective(base_img, M, output_size, borderMode=cv2.BORDER_REPLICATE)
+    augmented_rgb = cv2.warpPerspective(base_img, M, output_size, borderMode=cv2.BORDER_REPLICATE)
 
     if top_hacks:
         cyy = int(math.ceil(to_intr[1, 2]))
@@ -87,22 +77,19 @@ def transform_img(base_img,
             M = M.dot(pretransform)
         augmented_rgb[:cyy] = cv2.warpPerspective(base_img, M, (output_size[0], cyy), borderMode=cv2.BORDER_REPLICATE)
 
-    # print('before clip:', augmented_rgb.shape, augmented_rgb.dtype, np.min(augmented_rgb), np.max(augmented_rgb))
-    # # brightness and contrast augment
-    # with Timing(timing, 'transform_clip_brightness'):
-    #     augmented_rgb = np.clip((float(alpha)*augmented_rgb + beta), 0, 255).astype(np.uint8)
+    # brightness and contrast augment
+    # augmented_rgb = np.clip((float(alpha)*augmented_rgb + beta), 0, 255).astype(np.uint8)
 
     # print('after clip:', augmented_rgb.shape, augmented_rgb.dtype)
     # gaussian blur
     if blur > 0:
         augmented_rgb = cv2.GaussianBlur(augmented_rgb, (blur*2+1, blur*2+1), cv2.BORDER_DEFAULT)
 
-    with Timing(timing, 'transform_convert_to_yuv'):
-        if yuv:
-            augmented_img = cv2.cvtColor(augmented_rgb, cv2.COLOR_RGB2YUV_I420)
-        else:
-            augmented_img = augmented_rgb
-    # print('after convert to yuv:', augmented_rgb.shape, augmented_rgb.dtype)
+    if yuv:
+        augmented_img = cv2.cvtColor(augmented_rgb, cv2.COLOR_RGB2YUV_I420)
+    else:
+        augmented_img = augmented_rgb
+
     return augmented_img
 
 
@@ -162,18 +149,16 @@ def rgb_to_yuv(rgb):
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
 
 
-def transform_frames(frames, timing):
+def transform_frames(frames):
     imgs_med_model = np.zeros((len(frames), 384, 512), dtype=np.uint8)
     for i, img in enumerate(frames):
         imgs_med_model[i] = transform_img(img, 
                                           from_intr=eon_intrinsics,
                                           to_intr=medmodel_intrinsics, 
                                           yuv=True,
-                                          output_size=(512, 256),
-                                          timing=timing)
+                                          output_size=(512, 256))
 
-    with Timing(timing, 'reshape_yuv'):
-        reshaped = reshape_yuv(imgs_med_model)
+    reshaped = reshape_yuv(imgs_med_model)
 
     return reshaped
 
