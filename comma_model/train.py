@@ -26,7 +26,7 @@ else:
 print("=> using '{}' for computation.".format(device))
 
 
-#for reproducibility 
+#for reproducibility s
 seed = np.random.randint(2**16)
 torch.manual_seed(seed)
 print("=>seed={}".format(seed))
@@ -67,7 +67,7 @@ name = "onnx_gen_gt_comma_pipeline_" + date_it
 path_comma_recordings = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
-n_workers = 20
+n_workers = 10
 lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
 diff_lr = False
 recurr_warmup = True
@@ -84,7 +84,7 @@ batch_size = args.batch_size
 split_per = 0.8
 
 #wandb init
-run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
+# run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
 
 ### Load data and split in test and train
 print("=>Loading data")
@@ -101,8 +101,8 @@ elif "onnx" in name:
     comma_data_train = CommaLoader(path_comma_recordings, path_npz_dummy, 0.8, args.datatype,   train= True)
     train_loader = DataLoader(comma_data_train, batch_size = batch_size, shuffle= False, num_workers=n_workers)
 
-    comma_data_val = CommaLoader(path_comma_recordings, path_npz_dummy, 0.8, args.datatype,  val= True)
-    val_loader = DataLoader(comma_data_val, batch_size =  batch_size, shuffle= False, num_workers=n_workers)
+    # comma_data_val = CommaLoader(path_comma_recordings, path_npz_dummy, 0.8, args.datatype,  val= True)
+    # val_loader = DataLoader(comma_data_val, batch_size =  batch_size, shuffle= False, num_workers=n_workers)
 
 ##Load model 
 """
@@ -143,7 +143,7 @@ def load_model(params_scratch, pathplan):
 
 comma_model = load_model(param_scratch_model, pathplan_layer_names)
 comma_model = comma_model.to(device)
-wandb.watch(comma_model) # Log the network weight histograms
+# wandb.watch(comma_model) # Log the network weight histograms
 
 #allowing grad only for path_plan
 for name, param in comma_model.named_parameters():
@@ -198,54 +198,52 @@ else:
             like plan, lanellines, road-edges and more... 
 # """
 #Loss functions:
-def cal_path_loss(plan_pred, plan_gt, plan_prob_gt, batch_size ):
-    ## path plan
-    path_dict = {} 
-    path_plans =  plan_pred
-    path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+
+## path plan loss
+def mean_std(array):
+        mean = array[:,0,:,:].clone()
+        std = array[:,1,:,:].clone()
+        return mean, std
+def calcualte_path_loss(mean1, mean2, std1, std2):
+        d1 = torch.distributions.normal.Normal(mean1, std1)
+        d2 = torch.distributions.normal.Normal(mean2, std2)
+        loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
+        return loss
+def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size):
+    
+    path_dict = {}
+    path1, path2, path3, path4, path5 =torch.split(plan_pred,991,dim=1)
     path_dict["path_prob"] = []
-    path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
-    path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
-    path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
-    path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path1"] = path1[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path2"] = path2[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path3"] = path3[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path4"] = path4[:,:-1].clone().reshape(batch_size,2,33,15)
     path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
     path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
                     path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
-    #naive path_loss---> train all the paths together
-
-    path1_gt = plan_gt[:,0,:,:,:]
-    path2_gt = plan_gt[:,1,:,:,:]
-    path3_gt = plan_gt[:,2,:,:,:]
-    path4_gt = plan_gt[:,3,:,:,:]
-    path5_gt =plan_gt[:,4,:,:,:]
     
-    def mean_std(array):
-        mean = array[:,0,:,:]
-        std = array[:,1,:,:]
-        std = torch.exp(std) ## lower bound == 0; must be +ve
-        return mean, std
-
+    path1_gt = plan_gt[:,0,:,:,:].clone()
+    path2_gt = plan_gt[:,1,:,:,:].clone()
+    path3_gt = plan_gt[:,2,:,:,:].clone()
+    path4_gt = plan_gt[:,3,:,:,:].clone()
+    path5_gt =plan_gt[:,4,:,:,:].clone()
+#     print(path1_gt.shape)
     mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
     mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
 
+#     print(mean_pred_path1.shape)
+#     print(std_pred_path1.shape)
     mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
     mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
 
     mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
     mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
-    
+
     mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
     mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
 
     mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
     mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
-    
-    
-    def calcualte_path_loss(mean1, mean2, std1, std2):
-        d1 = torch.distributions.normal.Normal(mean1, std1)
-        d2 = torch.distributions.normal.Normal(mean2, std2)
-        loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
-        return loss
 
     path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
     path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
@@ -262,7 +260,7 @@ def cal_path_loss(plan_pred, plan_gt, plan_prob_gt, batch_size ):
     return path_plan_loss
 
 """
-Note: other loss functions to be used when training with scratch 
+Note: other loss functions to be used when training with all the outputs
 """
 # ## lanelines
 # lane_pred = lane_pred.reshape(batch_size, 4,2,33,2)
@@ -380,149 +378,141 @@ traffic_convention[0][1] =1
 traffic_convention = traffic_convention.requires_grad_(True).to(device)
 
 
-with run:
-    wandb.config.lr = lr
-    wandb.config.l2 = l2_lambda
-    wandb.config.lrs = str(scheduler)
-    wandb.config.seed = seed   
-    for epoch in tqdm(range(epochs)):
+# with run:
+#     wandb.config.lr = lr
+#     wandb.config.l2 = l2_lambda
+#     wandb.config.lrs = str(scheduler)
+#     wandb.config.seed = seed   
+for epoch in tqdm(range(epochs)):
 
-        start_point = time.time()
-        tr_loss = 0.0
-        run_loss = 0.0
+    start_point = time.time()
+    tr_loss = 0.0
+    run_loss = 0.0
 
-        for tr_it , data in tqdm(enumerate(train_loader)):
-            if args.datatype == "dummy" and args.modeltype == "scratch":        
-                #input
-                yuv_images = input[0].to(device)
-                desire = input[1].to(device)
-                traffic_convention = input[2].to(device) 
-                
-                #gt
-                plan_gt = labels[0].to(device)
-                plan_prob_gt = labels[1].to(device)
-                lane_line_gt = labels[2].to(device)
-                lane_prob_gt = labels[3].to(device)
-                road_edges_gt = labels[4].to(device) 
-                leads_gt = labels[5].to(device)
-                leads_prob_gt = labels[6].to(device)
-                lead_prob_gt = labels[7].to(device)
-                desire_gt = labels[8].to(device)
-                meta_eng_gt = labels[9].to(device)
-                meta_various_gt = labels[10].to(device)
-                meta_blinkers_gt = labels[11].to(device)
-                meta_desire_gt = labels[12].to(device)
-                pose_gt = labels[13].to(device)
-                desire = torch.squeeze(desire,dim =1)
-                traffic_convention = torch.squeeze(traffic_convention, dim = 1)
-        
-                output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
-                plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
+    for tr_it , data in tqdm(enumerate(train_loader)):
+        if args.datatype == "dummy" and args.modeltype == "scratch":        
+            #input
+            yuv_images = input[0].to(device)
+            desire = input[1].to(device)
+            traffic_convention = input[2].to(device) 
             
-                recurrent_state = output2 ## Feed back the recurrent state
+            #gt
+            plan_gt = labels[0].to(device)
+            plan_prob_gt = labels[1].to(device)
+            lane_line_gt = labels[2].to(device)
+            lane_prob_gt = labels[3].to(device)
+            road_edges_gt = labels[4].to(device) 
+            leads_gt = labels[5].to(device)
+            leads_prob_gt = labels[6].to(device)
+            lead_prob_gt = labels[7].to(device)
+            desire_gt = labels[8].to(device)
+            meta_eng_gt = labels[9].to(device)
+            meta_various_gt = labels[10].to(device)
+            meta_blinkers_gt = labels[11].to(device)
+            meta_desire_gt = labels[12].to(device)
+            pose_gt = labels[13].to(device)
+            desire = torch.squeeze(desire,dim =1)
+            traffic_convention = torch.squeeze(traffic_convention, dim = 1)
+    
+            output1, output2 = comma_model(yuv_images, desire, recurrent_state, traffic_convention)
+            plan_pred, lane_pred, lane_prob_pred, road_edges_pred, leads_pred, lead_prob_pred, desire_pred, meta_pred, meta_desire_pred, pose_pred = output1
+        
+            recurrent_state = output2 ## Feed back the recurrent state
+            
+        """
+        add recurr state warmup:skip backward for some iterations.
+        and move on to processing seq of batches.
+        """
+        if args.datatype == "gen_gt" and args.modeltype == "onnx":
+            print("yes i am in the loop")    
+            input, labels = data
+            input = input.to(device)
+            labels_path = labels[0].to(device)
+            labels_path_prob = labels[1].to(device)
+            optimizer.zero_grad()
+            
+            batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+            for i in range(batch_size):
+            # recurr_state = recurrent_state.clone()
+            
+                inputs_to_pretained_model = {"input_imgs":input[i],
+                                            "desire": desire,
+                                            "traffic_convention":traffic_convention,
+                                            "initial_state": recurr_state}
                 
-            """
-            add recurr state warmup:skip backward for some iterations.
-            and move on to processing seq of batches.
-            """
-            if args.datatype == "gen_gt" and args.modeltype == "onnx":
-                print("yes i am in the loop")    
-                input, labels = data
-                input = input.to(device)
-                labels_path = labels[0].to(device)
-                labels_path_prob = labels[1].to(device)
-                optimizer.zero_grad()
-                
-                batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
-                
-                # def updt_recurr(value_recurr):
+                outputs = comma_model(**inputs_to_pretained_model) 
+                plan_predictions = outputs[:,:4955].clone()
+                recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
+
+                single_itr_loss = cal_path_loss(plan_predictions, labels_path[i], labels_path_prob[i], 1)
+                if i == batch_size -1:
+                    recurr = recurr
+                else:   
+                    recurr_state = recurr
+
+                batch_loss += single_itr_loss
+            batch_loss  = batch_loss/batch_size # mean of losses of samples in batch
+            
+            # recurrent warmup
+            if recurr_warmup and epoch == 0 and tr_it>10:
+                batch_loss = batch_loss 
+            else: 
+                batch_loss.backward(retain_graph = True)
+            loss_cpu = batch_loss.detach().clone().item() ## this is the loss for one batch in one interation
+            
+            recurr_state = recurr
+            tr_loss += loss_cpu
+            run_loss += loss_cpu
+            optimizer.step()
+            
+            if (tr_it+1)%10 == 0:
+                print("printing the losses")
+                print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
+                if (tr_it+1) %100 == 0:
+                    # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
+                    scheduler.step(run_loss/100)
+                    run_loss =0.0
                     
-                #     update
+            # # validation loop  
+            #     with torch.no_grad(): ## saving memory by not accumulating activations
+            #         if (epoch +1) %check_val_epoch ==0:
+            #             val_st_pt = time.time()
+            #             val_loss_cpu = 0.0
+            #             checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
+            #             torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
+            #             print(">>>>>validating<<<<<<<")
 
+            #             for val_itr, val_data in enumerate(val_loader):
+            #                 val_input,val_labels = val_data
 
-                #     return update_recurr
-
-                for i in range(batch_size):
-                # recurr_state = recurrent_state.clone()
-                
-                    inputs_to_pretained_model = {"input_imgs":input[i],
-                                                "desire": desire,
-                                                "traffic_convention":traffic_convention,
-                                                "initial_state": recurr_state}
-                    
-                    outputs = comma_model(**inputs_to_pretained_model) 
-                    plan_predictions = outputs[:,:4955].clone()
-                    recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
-
-                    single_itr_loss = cal_path_loss(plan_predictions, labels_path[i], labels_path_prob[i], 1)
-                    if i == batch_size -1:
-                        recurr = recurr
-                    else:   
-                        recurr_state = recurr
-
-                    batch_loss += single_itr_loss
-                batch_loss  = batch_loss/batch_size # mean of losses of samples in batch
-                
-                # recurrent warmup
-                if recurr_warmup and epoch == 0 and tr_it>10:
-                    batch_loss = batch_loss 
-                else: 
-                    batch_loss.backward(retain_graph = True)
-                loss_cpu = batch_loss.detach().clone().item() ## this is the loss for one batch in one interation
-                
-                recurr_state = recurr
-                tr_loss += loss_cpu
-                run_loss += loss_cpu
-                optimizer.step()
-                
-                if (tr_it+1)%10 == 0:
-                    print("printing the losses")
-                    print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
-                    if (tr_it+1) %100 == 0:
-                        # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
-                        scheduler.step(run_loss/100)
-                        run_loss =0.0
-                    
-            # validation loop  
-                with torch.no_grad(): ## saving memory by not accumulating activations
-                    if (epoch +1) %check_val_epoch ==0:
-                        val_st_pt = time.time()
-                        val_loss_cpu = 0.0
-                        checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
-                        torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
-                        print(">>>>>validating<<<<<<<")
-
-                        for val_itr, val_data in enumerate(val_loader):
-                            val_input,val_labels = val_data
-
-                            val_input = val_input.to(device)
-                            val_label_path = val_labels[0].to(device)
-                            val_label_path_prob = val_labels[1].to(device)
-                            val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+            #                 val_input = val_input.to(device)
+            #                 val_label_path = val_labels[0].to(device)
+            #                 val_label_path_prob = val_labels[1].to(device)
+                           
+            #                 val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+            #                 for i in range(batch_size):
+            #                     val_inputs_to_pretained_model = {"input_imgs":val_input[i],
+            #                                             "desire": desire,
+            #                                             "traffic_convention":traffic_convention,
+            #                                             "initial_state": recurr_state}
                             
-                            for i in range(batch_size):
-                                val_inputs_to_pretained_model = {"input_imgs":val_input[i],
-                                                        "desire": desire,
-                                                        "traffic_convention":traffic_convention,
-                                                        "initial_state": recurr_state}
-                            
-                                val_outputs = comma_model(**val_inputs_to_pretained_model)
-                                val_path_prediction = val_outputs[:,:4955].clone()
+            #                     val_outputs = comma_model(**val_inputs_to_pretained_model)
+            #                     val_path_prediction = val_outputs[:,:4955].clone()
 
-                                single_val_loss = cal_path_loss(val_path_prediction,val_label_path[i], val_label_path_prob[i], 1)
-                                val_batch_loss += single_val_loss
+            #                     single_val_loss = cal_path_loss(val_path_prediction,val_label_path[i], val_label_path_prob[i], 1)
+            #                     val_batch_loss += single_val_loss
                             
-                            val_batch_loss = val_batch_loss/batch_size
-                            val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
+            #                 val_batch_loss = val_batch_loss/batch_size
+            #                 val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
 
-                            if (val_itr+1)%10 == 0:
-                                print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+            #                 if (val_itr+1)%10 == 0:
+            #                     print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
 
-                        print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
-                        val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
+            #             print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
+            #             val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
                             
-        print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}")
-        tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups[0]['lr'], time.time() - start_point )
+    print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}")
+    tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
 PATH = "./nets/model_itr/" +name + ".pth" 
 torch.save(comma_model.state_dict(), PATH)
