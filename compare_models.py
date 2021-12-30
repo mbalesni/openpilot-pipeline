@@ -182,6 +182,10 @@ if __name__ == '__main__':
     # pytorch_model.Constant_1059.constant = torch.tensor((2,2,66))
     # pytorch_model.Reshape_1060.shape = (2,2,66)
 
+    # keras
+    keras_model = onnx_to_keras(model, input_names, verbose=False)
+
+
     # inference
 
     comma_recordings_basedir = '/home/nikita/data'
@@ -190,8 +194,7 @@ if __name__ == '__main__':
     train_split = 0.8
     seq_len = 200
     single_frame_batches = False
-    batch_size = 1
-    num_workers = 1
+    batch_size = num_workers = 1
     prefetch_factor = 1
 
     os.makedirs(outs_folder, exist_ok=True)
@@ -205,6 +208,7 @@ if __name__ == '__main__':
 
     recurrent_state_torch = torch.zeros((1, 512), dtype=torch.float32).to(device)
     recurrent_state_onnx = np.zeros((1, 512), dtype=np.float32)
+    recurrent_state_keras = np.zeros((1, 512), dtype=np.float32)
 
     for i, batch in enumerate(train_loader):
         stacked_frames, plans, plans_probs, segment_finished, sequence_finished, bgr_frames = batch
@@ -225,29 +229,43 @@ if __name__ == '__main__':
                 'initial_state': recurrent_state_torch,
             }
 
-            inputs = {
+            onnx_inputs = {
                 'input_imgs': stacked_frame.numpy().astype(np.float32),
                 'desire': np.zeros((1, 8), dtype=np.float32),
                 'traffic_convention': np.array([0, 1], dtype=np.float32).reshape(1, 2),
                 'initial_state': recurrent_state_onnx,
             }
 
+            keras_inputs = {
+                'input_imgs': stacked_frame.numpy().astype(np.float32),
+                'desire': np.zeros((1, 8), dtype=np.float32),
+                'traffic_convention': np.array([0, 1], dtype=np.float32).reshape(1, 2),
+                'initial_state': recurrent_state_keras,
+            }
+
             outs_torch = pytorch_model(**torch_inputs).detach()
-            outs_onnx = onnxruntime_model.run(output_names, inputs)[0]
+            outs_onnx = onnxruntime_model.run(output_names, onnx_inputs)[0]
+            outs_keras = keras_model(keras_inputs)
 
             recurrent_state_torch = outs_torch[:, POSE:]
             recurrent_state_onnx = outs_onnx[:, POSE:]
+            recurrent_state_keras = outs_keras[:, POSE:]
 
             outs_torch = outs_torch.cpu().numpy()
+            outs_keras = outs_keras.numpy()
             cv2.imwrite(f'outs/{t_idx}-camera.png', bgr_frames[0, t_idx, :, :, :])
 
             onnx_lanelines, onnx_path = extract_preds(outs_onnx)
             _, torch_path = extract_preds(outs_torch)
+            _, keras_path = extract_preds(outs_keras)
 
             diff_torch_onnx = np.max(np.abs(torch_path - onnx_path))
+            diff_torch_keras = np.max(np.abs(torch_path - keras_path))
+            diff_keras_onnx = np.max(np.abs(keras_path - onnx_path))
+            max_diff = max(diff_torch_onnx, diff_torch_keras, diff_keras_onnx)
 
-            if diff_torch_onnx > 0.5:
-                print(f'[{t_idx}] path diff: {diff_torch_onnx}')
+            if max_diff > 0.5:
+                print(f'[{t_idx}] largest path diff: {max_diff:.2e}')
 
             bg_color = '#3c3734'
             fig, ax = plt.subplots(1, 1, figsize=(10, 50))
@@ -258,7 +276,7 @@ if __name__ == '__main__':
             fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
             ax.set_facecolor(bg_color)
-            ax.set_title(f'Max path difference: {diff_torch_onnx:.3e}', fontsize=16, color='white')
+            ax.set_title(f'Diffs:\nTorch-ONNX: {diff_torch_onnx:.2e}   Torch-Keras: {diff_torch_keras:.2e}   Keras-ONNX: {diff_keras_onnx:.2e}', fontsize=14, color='white')
             ax.set_xlim(-15, 15)
             ax.set_ylim(-1, 150)
 
@@ -266,12 +284,12 @@ if __name__ == '__main__':
                 ax.plot(laneline, X_IDXS, linewidth=1, color=color)
                 # ax.fill_betweenx(X_IDXS, laneline-conf, laneline+conf, color=color, alpha=0.2)
 
-            plan_sources = ['PyTorch', 'ONNX']
-            best_plans = [onnx_path, torch_path]
+            plan_sources = ['PyTorch', 'ONNX', 'Keras']
+            best_plans = [torch_path, onnx_path, keras_path]
 
             for model_name, plan in zip(plan_sources, best_plans):
 
-                ax.plot(plan[PLAN_MEAN, :, PLAN_Y], plan[PLAN_MEAN, :, PLAN_X], linewidth=4, label=f'Plan by {model_name.capitalize()}')
+                ax.plot(plan[PLAN_MEAN, :, PLAN_Y], plan[PLAN_MEAN, :, PLAN_X], linewidth=4, alpha=0.5, label=f'Plan by {model_name.capitalize()}')
                 ax.fill_betweenx(plan[PLAN_MEAN, :, PLAN_X],
                                  plan[PLAN_MEAN, :, PLAN_Y] - plan[PLAN_STD, :, PLAN_Y],
                                  plan[PLAN_MEAN, :, PLAN_Y] + plan[PLAN_STD, :, PLAN_Y],
