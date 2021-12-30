@@ -86,9 +86,10 @@ def generate_ground_truth( camerafile, supercombo ):
 
     outs = outs[0][0]
     
-    p = outs[:PATH]
-    plans.append( np.reshape( p[:PATH-5], ( 5, 2, 33, 15 ) ) )
-    plans_prob.append( np.reshape( p[PATH-5:PATH], ( 5, 1 ) ) )
+    plans_flat = outs[:PATH]
+    plans_flat = np.array(np.split(plans_flat, 5, axis=0))  # (5, 991)
+    plans.append(plans_flat[:, :-1].reshape(5, 2, 33, 15))  # (5, 2, 33, 15)
+    plans_prob.append(plans_flat[:, -1])  # (5, 1)
     lanelines.append( np.reshape( outs[PATH:LANE_LINES], (4, 2, 33, 2) ) )
     laneline_probs.append( np.reshape( outs[LANE_LINES:LANE_LINE_PROB], (4,2) ) )
     road_edges.append( np.reshape( outs[LANE_LINE_PROB:ROAD_EDGES], (2,2,33,2) ) )
