@@ -18,7 +18,8 @@ from matplotlib.cm import get_cmap
 
 
 def printf(*args, **kwargs):
-    print(*args, **kwargs, flush=True)
+    kwargs['flush'] = True
+    print(*args, **kwargs)
 
 
 def color_thresh(x, threshold=1e-3):
@@ -156,7 +157,7 @@ if __name__ == '__main__':
     outs_folder = 'outs'
 
     train_split = 0.8
-    seq_len = 100
+    seq_len = 150
     single_frame_batches = False
     prefetch_factor = 1
 
@@ -175,9 +176,9 @@ if __name__ == '__main__':
     plots = []
 
     # batch_sizes = [1, 8]
-    batch_sizes = [1,2]
+    batch_sizes = [1, 4]
 
-    errors_by_op_type = []
+    errors_by_op_type = {}
 
 
     for batch_size in batch_sizes:
@@ -187,7 +188,7 @@ if __name__ == '__main__':
 
         errors.append([])
         plots.append([])
-        errors_by_op_type.append([])
+        errors_by_op_type[batch_size] = []
 
 
         # onnxruntime
@@ -196,7 +197,7 @@ if __name__ == '__main__':
 
         # pytorch
         device = torch.device('cuda:1')
-        pytorch_model = ConvertModel(model, experimental=True, debug=False).to(device)
+        pytorch_model = ConvertModel(model, experimental=True, debug=True).to(device)
         pytorch_model.requires_grad_(False)
         pytorch_model.train(False)  # NOTE: important
 
@@ -263,18 +264,14 @@ if __name__ == '__main__':
                 }
 
 
+                desired_output_layers = list(set(node_nums_to_node.keys()) - set(input_names))
+
                 layer_names = [layer.name for layer in keras_model.layers]
                 keras_layer_outs = get_activations(keras_model, list(keras_inputs.values()), layer_names=None, output_format='simple', auto_compile=True)
-                keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k not in input_names}  # indexed by layer num
-
-                keras_layer_out_nums = list(keras_layer_outs.keys())
-                keras_layer_out_names = [node_nums_to_node[num].name for num in keras_layer_out_nums if num in node_nums_to_node]
-                # print('layer outs nums:', keras_layer_out_nums)
-                # print('layer outs names:', keras_layer_out_names)
+                keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in desired_output_layers}  # indexed by layer num
 
 
-
-                torch_layer_outs = pytorch_model(**torch_inputs, output_names=keras_layer_out_nums)  # indexed by layer num
+                torch_layer_outs, diffs = pytorch_model(**torch_inputs, debug_activations=keras_layer_outs, output_names=desired_output_layers)  # indexed by layer num
                 keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in torch_layer_outs.keys()}  # indexed by layer num
                 # outs_onnx = onnxruntime_model.run(output_names, onnx_inputs)[0]
                 # outs_keras = keras_model(keras_inputs)
@@ -283,33 +280,25 @@ if __name__ == '__main__':
                 # recurrent_state_onnx = outs_onnx[:, POSE:]
                 recurrent_state_keras = keras_layer_outs['outputs'][:, POSE:]
 
-                torch_outs = {k: v.detach().cpu().numpy() for k, v in torch_layer_outs.items() if k in node_nums_to_node}
-                keras_outs = {k: v for k, v in keras_layer_outs.items() if k in node_nums_to_node}
+                errors_by_op_type[batch_size].append({})
 
-                errors_by_op_type[-1].append({})
 
-                for node_num in torch_outs.keys():
+                for node_num, diff in diffs.items():
 
-                    # get diff
-                    keras_act = keras_outs[node_num]
-                    torch_act = torch_outs[node_num]
-                    diff = np.max(np.abs(keras_act - torch_act))
+                    nodename = node_nums_to_node[node_num].name
 
                     # save diff
                     node_op = node_nums_to_node[node_num].op_type
-                    if node_op not in errors_by_op_type[-1][-1]:
-                        errors_by_op_type[-1][-1][node_op] = []
-                    errors_by_op_type[-1][-1][node_op].append(diff)
+                    if node_op not in errors_by_op_type[batch_size][-1]:
+                        errors_by_op_type[batch_size][-1][node_op] = []
+                    errors_by_op_type[batch_size][-1][node_op].append(diff)
 
                     # log
-                    nodename = node_nums_to_node[node_num].name
-
                     # TODO: plot diff for each node in time
-                    # print(f'Node: {nodename}.') 
+                    # printf(f'Node: {nodename}.') 
                     # print(f'Shape: {list(torch_act.shape)}.')
-                    # print(f'Diff: {diff:.2e}')
-                    # print()
-
+                    # printf(f'Diff: {diff:.2e}')
+                    # printf()
 
 
                 # outs_torch = outs_torch.cpu().numpy()
@@ -344,26 +333,25 @@ if __name__ == '__main__':
             break
 
     # print errors by op type
-    op_types = list(errors_by_op_type[0][0].keys())
+    sample_batch_size = batch_sizes[0]
+    op_types = list(errors_by_op_type[sample_batch_size][0].keys())
     op_types.sort()
     print('op types:', op_types)
-    print('errors_by_op_type:', len(errors_by_op_type), len(errors_by_op_type[0]), len(errors_by_op_type[0][0]), len(errors_by_op_type[0][0]['Gemm']))
 
     plots = {}  # dict of (num_op_types, seq_len, 2) arrays, indexed by batch_size
 
 
-    for i, batch_size in enumerate(batch_sizes):
+    for batch_size in batch_sizes:
         plots[batch_size] = []
 
         for op_type in op_types:
             plots[batch_size].append([])
 
-            for frame_idx in range(len(errors_by_op_type[i])):
+            for frame_idx in range(len(errors_by_op_type[batch_size])):
 
-                op_sum_err = np.sum(errors_by_op_type[i][frame_idx][op_type])
-                op_avg_err = np.mean(errors_by_op_type[i][frame_idx][op_type])
+                op_sum_err = np.sum(errors_by_op_type[batch_size][frame_idx][op_type])
+                op_avg_err = np.mean(errors_by_op_type[batch_size][frame_idx][op_type])
                 op_stacked_err = np.array([op_sum_err, op_avg_err])
-                print(f'{op_type} ({len(errors_by_op_type[i][frame_idx][op_type])} instances): {op_stacked_err}')
                 plots[batch_size][-1].append(op_stacked_err)
 
             plots[batch_size][-1] = np.array(plots[batch_size][-1])
@@ -378,27 +366,30 @@ if __name__ == '__main__':
 
     x = np.arange(seq_len)
 
-    fig, axes = plt.subplots(2,2, figsize=(30,10))
-    fig.suptitle('Errors by op type')
+    fig, axes = plt.subplots(2, 2, figsize=(30,10))
+    fig.suptitle('Errors by NN layer type', fontsize=22)
 
-    reductions = ['Total', 'Average (per layer instance)']
+    reductions = ['Total', 'Average (per instance)']
 
     for i in range(2):
         for j, (batch_size, bs_errors) in enumerate(plots.items()):
             
             axes[i, j].set_prop_cycle(color=colors)
 
-            if i == 1:
-                axes[i, j].set_title(f'Batch size: {batch_size}')
-                axes[i, j].set_xlabel('Frame')
+            if i == 0:
+                axes[i, j].set_title(f'Batch size: {batch_size}', fontsize=16)
 
+            if j == 0:
+                axes[i, j].set_ylabel(f'{reductions[i]} Error', fontsize=16)
+
+            axes[i, j].set_xlabel('Frame', fontsize=16)
             axes[i, j].set_yscale('log')
-            axes[i, j].set_ylabel(f'{reductions[i]} error')
 
             axes[i, j].stackplot(x, bs_errors[..., i], labels=op_types)
             axes[i, j].legend()
 
-    fig.savefig('outs/errors_by_op_type.png')
+    fig.tight_layout()
+    fig.savefig(f'outs/errors_by_op_type_bs_{batch_sizes[0]}.png')
 
     # errors = np.array(errors)  # 4, seq_len
     
