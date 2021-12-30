@@ -150,6 +150,118 @@ def extract_preds(res):
     return lanelines, best_path
 
 
+def plot_errors_by_op_type(errors_log, batch_sizes, save_path):
+
+    os.makedirs('out', exist_ok=True)
+
+    sample_batch_size = batch_sizes[0]
+    op_types = list(errors_log[sample_batch_size][0].keys())
+    op_types.sort()
+
+    plots = {}  # dict of (num_op_types, seq_len, 2) arrays, indexed by batch_size
+
+    for batch_size in batch_sizes:
+        plots[batch_size] = []
+
+        for op_type in op_types:
+            plots[batch_size].append([])
+
+            for frame_idx in range(len(errors_log[batch_size])):
+
+                op_sum_err = np.sum(errors_log[batch_size][frame_idx][op_type])
+                op_avg_err = np.mean(errors_log[batch_size][frame_idx][op_type])
+                op_stacked_err = np.array([op_sum_err, op_avg_err])
+                plots[batch_size][-1].append(op_stacked_err)
+
+            plots[batch_size][-1] = np.array(plots[batch_size][-1])
+
+        plots[batch_size] = np.array(plots[batch_size])
+
+    colormap_name = "tab20"
+    cmap = get_cmap(colormap_name)  
+    colors = cmap.colors
+
+    x = np.arange(seq_len)
+
+    fig, axes = plt.subplots(2, 2, figsize=(30,10))
+    fig.suptitle('Errors by NN layer type', fontsize=22)
+
+    reductions = ['Total', 'Average (per instance)']
+
+    for i in range(2):
+        for j, (batch_size, bs_errors) in enumerate(plots.items()):
+            
+            axes[i, j].set_prop_cycle(color=colors)
+
+            if i == 0:
+                axes[i, j].set_title(f'Batch size: {batch_size}', fontsize=16)
+
+            if j == 0:
+                axes[i, j].set_ylabel(f'{reductions[i]} Error', fontsize=16)
+
+            axes[i, j].set_xlabel('Frame', fontsize=16)
+            axes[i, j].set_yscale('log')
+
+            axes[i, j].stackplot(x, bs_errors[..., i], labels=op_types)
+            axes[i, j].legend()
+
+    fig.tight_layout()
+    fig.savefig(save_path)
+
+
+def plot_model_preds(data_obj, seq_len, batch_sizes):
+    os.makedirs('out', exist_ok=True)
+
+    for t_idx in tqdm(range(seq_len), total=seq_len):
+        batch_plots = [list_of_plots[t_idx] for list_of_plots in data_obj]
+
+        bg_color = '#3c3734'
+        fig, axes = plt.subplots(1, len(batch_sizes), figsize=(len(data_obj)*10, 50))
+        fig.patch.set_facecolor(bg_color)
+        fig.suptitle(f'Path prediction diff @ T={t_idx}', fontsize=20, color='white')
+        fig.tight_layout()
+
+        for ind, ax in enumerate(axes):
+            batch_size = batch_sizes[ind]
+            plot_data = batch_plots[ind]
+
+            diff = plot_data['diff']
+            torch_lanelines = plot_data['torch_lanelines']
+            keras_lanelines = plot_data['keras_lanelines']
+            plan_sources = plot_data['plan_sources']
+            best_plans = plot_data['best_plans']
+
+            ax.set_facecolor(bg_color)
+            ax.set_title(f'Diff (batch_size={batch_size}): {diff:.1e}', fontsize=14, color='white')
+            ax.set_xlim(-15, 15)
+            ax.set_ylim(-1, 150)
+
+            for laneline, conf, color in torch_lanelines:
+                ax.plot(laneline[sample_idx], X_IDXS, linewidth=1, color='white')
+
+            for laneline, conf, color in keras_lanelines:
+                ax.plot(laneline[sample_idx], X_IDXS, linewidth=1, color='limegreen')
+
+            for model_name, plan in zip(plan_sources, best_plans):
+
+                label = f'Plan by {model_name.capitalize()}'
+                if model_name != 'torch':
+                    label += f' ({diff:.1e})'
+
+                ax.plot(plan[PLAN_MEAN, :, PLAN_Y], plan[PLAN_MEAN, :, PLAN_X], linewidth=4, alpha=0.5, label=label)
+                ax.fill_betweenx(plan[PLAN_MEAN, :, PLAN_X],
+                                plan[PLAN_MEAN, :, PLAN_Y] - plan[PLAN_STD, :, PLAN_Y],
+                                plan[PLAN_MEAN, :, PLAN_Y] + plan[PLAN_STD, :, PLAN_Y],
+                                alpha=0.2)
+
+        plt.legend()
+
+        fig.savefig(f'outs/{t_idx}-model_preds.png')
+        fig.clear()
+        fig.clf()
+        plt.close('all')
+
+
 if __name__ == '__main__':
 
     comma_recordings_basedir = '/home/nikita/data'
@@ -160,6 +272,7 @@ if __name__ == '__main__':
     seq_len = 150
     single_frame_batches = False
     prefetch_factor = 1
+    debug = False
 
     os.makedirs(outs_folder, exist_ok=True)
     model = onnx.load(path_to_onnx_model)
@@ -173,10 +286,11 @@ if __name__ == '__main__':
     printf('Outputs: ', output_names)
 
     errors = []
-    plots = []
+    model_logs = []
 
     # batch_sizes = [1, 8]
-    batch_sizes = [1, 4]
+    # batch_sizes = [1, 4]
+    batch_sizes = [1, 2]
 
     errors_by_op_type = {}
 
@@ -187,7 +301,7 @@ if __name__ == '__main__':
         print('-- TEST BATCH SIZE:', batch_size)
 
         errors.append([])
-        plots.append([])
+        model_logs.append([])
         errors_by_op_type[batch_size] = []
 
 
@@ -197,7 +311,7 @@ if __name__ == '__main__':
 
         # pytorch
         device = torch.device('cuda:1')
-        pytorch_model = ConvertModel(model, experimental=True, debug=True).to(device)
+        pytorch_model = ConvertModel(model, experimental=True, debug=debug).to(device)
         pytorch_model.requires_grad_(False)
         pytorch_model.train(False)  # NOTE: important
 
@@ -240,7 +354,7 @@ if __name__ == '__main__':
             for t_idx in tqdm(range(seq_len), total=seq_len):
 
                 stacked_frame = stacked_frames[:, t_idx, :, :, :]  # (batch_size, 12, 128, 256) selects the `t_idx`-th frame for each of `batch_size` segments 
-                sample_idx = 0
+                sample_idx = 0  # keep 0, used to select a single sample for keras/onnx
 
                 torch_inputs = {
                     'input_imgs': stacked_frame.float().to(device),
@@ -263,190 +377,72 @@ if __name__ == '__main__':
                     'initial_state': recurrent_state_keras,
                 }
 
+                if debug:
+                    desired_output_layers = list(set(node_nums_to_node.keys()) - set(input_names))
 
-                desired_output_layers = list(set(node_nums_to_node.keys()) - set(input_names))
+                    layer_names = [layer.name for layer in keras_model.layers]
+                    keras_layer_outs = get_activations(keras_model, list(keras_inputs.values()), layer_names=None, output_format='simple', auto_compile=True)
+                    keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in desired_output_layers}  # indexed by layer num
 
-                layer_names = [layer.name for layer in keras_model.layers]
-                keras_layer_outs = get_activations(keras_model, list(keras_inputs.values()), layer_names=None, output_format='simple', auto_compile=True)
-                keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in desired_output_layers}  # indexed by layer num
+                    torch_layer_outs, diffs = pytorch_model(**torch_inputs, debug_activations=keras_layer_outs)  # indexed by layer num
+                    keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in torch_layer_outs.keys()}  # indexed by layer num
+                    # outs_onnx = onnxruntime_model.run(output_names, onnx_inputs)[0]
 
+                    recurrent_state_torch = torch_layer_outs[:, POSE:]
+                    recurrent_state_keras = keras_layer_outs['outputs'][:, POSE:]
+                    # recurrent_state_onnx = outs_onnx[:, POSE:]
 
-                torch_layer_outs, diffs = pytorch_model(**torch_inputs, debug_activations=keras_layer_outs, output_names=desired_output_layers)  # indexed by layer num
-                keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in torch_layer_outs.keys()}  # indexed by layer num
-                # outs_onnx = onnxruntime_model.run(output_names, onnx_inputs)[0]
-                # outs_keras = keras_model(keras_inputs)
+                    errors_by_op_type[batch_size].append({})
 
-                recurrent_state_torch = torch_layer_outs['outputs'][:, POSE:]
-                # recurrent_state_onnx = outs_onnx[:, POSE:]
-                recurrent_state_keras = keras_layer_outs['outputs'][:, POSE:]
+                    for node_num, diff in diffs.items():
 
-                errors_by_op_type[batch_size].append({})
+                        nodename = node_nums_to_node[node_num].name
 
+                        # save diff
+                        node_op = node_nums_to_node[node_num].op_type
+                        if node_op not in errors_by_op_type[batch_size][-1]:
+                            errors_by_op_type[batch_size][-1][node_op] = []
+                        errors_by_op_type[batch_size][-1][node_op].append(diff)
 
-                for node_num, diff in diffs.items():
+                        # TODO: plot diff for each node in time
 
-                    nodename = node_nums_to_node[node_num].name
+                    torch_outs = torch_layer_outs.detach().cpu().numpy()
+                    keras_outs = keras_layer_outs['outputs'].numpy()
+                else:
+                    torch_outs = pytorch_model(**torch_inputs)
+                    keras_outs = keras_model(keras_inputs)
 
-                    # save diff
-                    node_op = node_nums_to_node[node_num].op_type
-                    if node_op not in errors_by_op_type[batch_size][-1]:
-                        errors_by_op_type[batch_size][-1][node_op] = []
-                    errors_by_op_type[batch_size][-1][node_op].append(diff)
+                    recurrent_state_torch = torch_outs[:, POSE:]
+                    recurrent_state_keras = keras_outs[:, POSE:]
 
-                    # log
-                    # TODO: plot diff for each node in time
-                    # printf(f'Node: {nodename}.') 
-                    # print(f'Shape: {list(torch_act.shape)}.')
-                    # printf(f'Diff: {diff:.2e}')
-                    # printf()
-
-
-                # outs_torch = outs_torch.cpu().numpy()
-                # # outs_keras = outs_keras.numpy()
-                
-                # cv2.imwrite(f'outs/{t_idx}-camera.png', bgr_frames[sample_idx, t_idx, :, :, :])
-
-                # # print('onnx outs:', outs_onnx.shape)
-                # # print('torch outs:', outs_torch.shape)
-
-                # lanelines, onnx_path = extract_preds(outs_onnx)
-                # _, torch_path = extract_preds(outs_torch)
-                # # _, keras_path = extract_preds(outs_keras)
+                    torch_outs = torch_outs.detach().cpu().numpy()
+                    keras_outs = keras_outs.numpy()
 
 
-                # # diff_torch_keras = np.max(np.abs(torch_path[sample_idx] - keras_path[sample_idx]))
-                # diff_torch_onnx = np.max(np.abs(torch_path[sample_idx] - onnx_path[sample_idx]))
+                cv2.imwrite(f'outs/{t_idx}-camera.png', bgr_frames[sample_idx, t_idx, :, :, :])
 
-                # plan_sources = ['PyTorch', 'Keras']
-                # best_plans = [torch_path[sample_idx], onnx_path[sample_idx]]
+                torch_lanelines, torch_path = extract_preds(torch_outs)
+                keras_lanelines, keras_path = extract_preds(keras_outs)
+                diff_torch_keras = np.max(np.abs(torch_path[sample_idx] - keras_path[sample_idx]))
+                plan_sources = ['PyTorch', 'Keras']
+                best_plans = [torch_path[sample_idx], keras_path[sample_idx]]
 
-                # plot = {
-                #     'diff': diff_torch_onnx,
-                #     'lanelines': lanelines,
-                #     'plan_sources': plan_sources,
-                #     'best_plans': best_plans,
-                # }
+                model_preds = {
+                    'diff': diff_torch_keras,
+                    'torch_lanelines': torch_lanelines,
+                    'keras_lanelines': keras_lanelines,
+                    'plan_sources': plan_sources,
+                    'best_plans': best_plans,
+                }
 
-                # errors[-1].append(diff_torch_onnx)
-                # plots[-1].append(plot)
+                errors[-1].append(diff_torch_keras)
+                model_logs[-1].append(model_preds)
 
             break
 
-    # print errors by op type
-    sample_batch_size = batch_sizes[0]
-    op_types = list(errors_by_op_type[sample_batch_size][0].keys())
-    op_types.sort()
-    print('op types:', op_types)
+    if debug:
+        plot_errors_by_op_type(errors_by_op_type, batch_sizes, 'errors_by_op_type.png')
 
-    plots = {}  # dict of (num_op_types, seq_len, 2) arrays, indexed by batch_size
-
-
-    for batch_size in batch_sizes:
-        plots[batch_size] = []
-
-        for op_type in op_types:
-            plots[batch_size].append([])
-
-            for frame_idx in range(len(errors_by_op_type[batch_size])):
-
-                op_sum_err = np.sum(errors_by_op_type[batch_size][frame_idx][op_type])
-                op_avg_err = np.mean(errors_by_op_type[batch_size][frame_idx][op_type])
-                op_stacked_err = np.array([op_sum_err, op_avg_err])
-                plots[batch_size][-1].append(op_stacked_err)
-
-            plots[batch_size][-1] = np.array(plots[batch_size][-1])
-
-        plots[batch_size] = np.array(plots[batch_size])
-
-    print('plot', plots[batch_sizes[0]].shape)  # (num_op_types, seq_len, 2)
-
-    colormap_name = "tab20"
-    cmap = get_cmap(colormap_name)  
-    colors = cmap.colors  # type: list
-
-    x = np.arange(seq_len)
-
-    fig, axes = plt.subplots(2, 2, figsize=(30,10))
-    fig.suptitle('Errors by NN layer type', fontsize=22)
-
-    reductions = ['Total', 'Average (per instance)']
-
-    for i in range(2):
-        for j, (batch_size, bs_errors) in enumerate(plots.items()):
-            
-            axes[i, j].set_prop_cycle(color=colors)
-
-            if i == 0:
-                axes[i, j].set_title(f'Batch size: {batch_size}', fontsize=16)
-
-            if j == 0:
-                axes[i, j].set_ylabel(f'{reductions[i]} Error', fontsize=16)
-
-            axes[i, j].set_xlabel('Frame', fontsize=16)
-            axes[i, j].set_yscale('log')
-
-            axes[i, j].stackplot(x, bs_errors[..., i], labels=op_types)
-            axes[i, j].legend()
-
-    fig.tight_layout()
-    fig.savefig(f'outs/errors_by_op_type_bs_{batch_sizes[0]}.png')
-
-    # errors = np.array(errors)  # 4, seq_len
-    
-    # plt.figure(figsize=(10, 5))
-    # plt.yscale('log')
-    # plt.xlabel('Frame')
-    # plt.ylabel('Absolute diff between torch and onnx')
-
-    # for bs, sequence_errors in zip(batch_sizes, errors):
-    #     plt.scatter(np.arange(0, len(sequence_errors)), sequence_errors, label=f'batch_size = {bs} (mean={np.mean(sequence_errors):.1e})', alpha=0.5)
-    #     print(f'BS: {bs}. avg error: {np.mean(sequence_errors):.1e}', [f'{e:.1e}' for e in sequence_errors])
-
-    # plt.legend()
-    # plt.savefig('outs/errors-log.png')
-    # plt.close('all')
-
-    # for t_idx in tqdm(range(seq_len), total=seq_len):
-    #     batch_plots = [list_of_plots[t_idx] for list_of_plots in plots]
-
-    #     bg_color = '#3c3734'
-    #     fig, axes = plt.subplots(1, len(batch_sizes), figsize=(len(plots)*10, 50))
-    #     fig.patch.set_facecolor(bg_color)
-    #     fig.suptitle(f'Path prediction diff @ T={t_idx}', fontsize=20, color='white')
-
-    #     # set tight layout
-    #     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    #     for ind, ax in enumerate(axes):
-    #         batch_size = batch_sizes[ind]
-    #         plot_data = batch_plots[ind]
-
-    #         diff = plot_data['diff']
-    #         lanelines = plot_data['lanelines']
-    #         plan_sources = plot_data['plan_sources']
-    #         best_plans = plot_data['best_plans']
-
-    #         ax.set_facecolor(bg_color)
-    #         ax.set_title(f'Diff (batch_size={batch_size}): {diff:.1e}', fontsize=14, color='white')
-    #         ax.set_xlim(-15, 15)
-    #         ax.set_ylim(-1, 150)
-
-    #         for laneline, conf, color in lanelines:
-    #             ax.plot(laneline[sample_idx], X_IDXS, linewidth=1, color=color)
-
-    #         for model_name, plan in zip(plan_sources, best_plans):
-
-    #             ax.plot(plan[PLAN_MEAN, :, PLAN_Y], plan[PLAN_MEAN, :, PLAN_X], linewidth=4, alpha=0.5, label=f'Plan by {model_name.capitalize()}')
-    #             ax.fill_betweenx(plan[PLAN_MEAN, :, PLAN_X],
-    #                             plan[PLAN_MEAN, :, PLAN_Y] - plan[PLAN_STD, :, PLAN_Y],
-    #                             plan[PLAN_MEAN, :, PLAN_Y] + plan[PLAN_STD, :, PLAN_Y],
-    #                             alpha=0.2)
-
-    #     plt.legend()
-
-    #     fig.savefig(f'outs/{t_idx}-topdown.png')
-    #     fig.clear()
-    #     fig.clf()
-    #     plt.close('all')
+    plot_model_preds(model_logs, seq_len, batch_sizes)
 
     printf('DONE')
