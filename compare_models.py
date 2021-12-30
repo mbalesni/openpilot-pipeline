@@ -241,37 +241,33 @@ if __name__ == '__main__':
             outs_torch = outs_torch.cpu().numpy()
             cv2.imwrite(f'outs/{t_idx}-camera.png', bgr_frames[0, t_idx, :, :, :])
 
-            # # compare
-            # # diff_torch_onnx = np.max(np.abs(outs_torch_np - outs_onnx))
-
-            # # print each diff
-            # # printf('max diff torch-onnx', diff_torch_onnx)
-
             onnx_lanelines, onnx_path = extract_preds(outs_onnx)
             _, torch_path = extract_preds(outs_torch)
 
-            gt_paths = plans[0, t_idx, ...]  # (5, 2, 33, 15)
-            gt_path_probs = plans_probs[0, t_idx, ...].squeeze()  # (5, 1)
+            diff_torch_onnx = np.max(np.abs(torch_path - onnx_path))
 
-            best_gt_path_idx = torch.argmax(gt_path_probs)
-            print('gt path probs:', gt_path_probs)  # should be on the order of -50 (negative fifty, *not* close to zero)
-            gt_path = gt_paths[best_gt_path_idx, ...]  # (2, 33, 15)
+            if diff_torch_onnx > 0.5:
+                print(f'[{t_idx}] path diff: {diff_torch_onnx}')
 
             bg_color = '#3c3734'
-            fig, ax = plt.subplots(1, 1, figsize=(10, 20))
+            fig, ax = plt.subplots(1, 1, figsize=(10, 50))
             fig.patch.set_facecolor(bg_color)
-            fig.suptitle(f'Topdown path prediction @ T={t_idx}')
+            fig.suptitle(f'Topdown path prediction @ T={t_idx}', fontsize=20, color='white')
+
+            # set tight layout
+            fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
             ax.set_facecolor(bg_color)
-            ax.set_xlim(-12.5, 12.5)
-            ax.set_ylim(-1, 50)
+            ax.set_title(f'Max path difference: {diff_torch_onnx:.3e}', fontsize=16, color='white')
+            ax.set_xlim(-15, 15)
+            ax.set_ylim(-1, 150)
 
             for laneline, conf, color in onnx_lanelines:
                 ax.plot(laneline, X_IDXS, linewidth=1, color=color)
                 # ax.fill_betweenx(X_IDXS, laneline-conf, laneline+conf, color=color, alpha=0.2)
 
-            plan_sources = ['PyTorch', 'ONNX', 'Ground truth']
-            best_plans = [onnx_path, torch_path, gt_path]
+            plan_sources = ['PyTorch', 'ONNX']
+            best_plans = [onnx_path, torch_path]
 
             for model_name, plan in zip(plan_sources, best_plans):
 
