@@ -150,7 +150,7 @@ def extract_preds(res):
     return lanelines, best_path
 
 
-def plot_errors_by_op_type(errors_log, batch_sizes, save_path):
+def plot_errors_logs(errors_log, batch_sizes, save_path):
 
     os.makedirs('out', exist_ok=True)
 
@@ -176,6 +176,10 @@ def plot_errors_by_op_type(errors_log, batch_sizes, save_path):
             plots[batch_size][-1] = np.array(plots[batch_size][-1])
 
         plots[batch_size] = np.array(plots[batch_size])
+
+    are_equal = np.allclose(plots[batch_sizes[0]], plots[batch_sizes[1]], rtol=1e-3, atol=1e-4)
+    assert are_equal, 'errors for diff batch sizes are not equal'
+    print('max diff:', np.max(np.abs(plots[batch_sizes[0]] - plots[batch_sizes[1]])))
 
     colormap_name = "tab20"
     cmap = get_cmap(colormap_name)  
@@ -269,10 +273,10 @@ if __name__ == '__main__':
     outs_folder = 'outs'
 
     train_split = 0.8
-    seq_len = 150
+    seq_len = 10
     single_frame_batches = False
     prefetch_factor = 1
-    debug = False
+    debug = True
 
     os.makedirs(outs_folder, exist_ok=True)
     model = onnx.load(path_to_onnx_model)
@@ -292,7 +296,7 @@ if __name__ == '__main__':
     # batch_sizes = [1, 4]
     batch_sizes = [1, 2]
 
-    errors_by_op_type = {}
+    errors_logs = {}
 
 
     for batch_size in batch_sizes:
@@ -302,7 +306,7 @@ if __name__ == '__main__':
 
         errors.append([])
         model_logs.append([])
-        errors_by_op_type[batch_size] = []
+        errors_logs[batch_size] = []
 
 
         # onnxruntime
@@ -377,22 +381,29 @@ if __name__ == '__main__':
                     'initial_state': recurrent_state_keras,
                 }
 
+
+                # TODO: so path predictions have higher errors for batch_size > 0 (e.g. see `outs/127-model_preds.png`),
+                # but the the plots for errors by layer type (e.g. see `errors_by_op.png`) say the errors are the same for batch_size=1 and batch_size=4.
+                # Need to diagnose this.
+                # 1. Are errors really higher for batch_size > 1?
+                # 2. If so, which layers contribute to this?
+                # 3. Any ideas for fixes?
+
+
                 if debug:
                     desired_output_layers = list(set(node_nums_to_node.keys()) - set(input_names))
 
-                    layer_names = [layer.name for layer in keras_model.layers]
                     keras_layer_outs = get_activations(keras_model, list(keras_inputs.values()), layer_names=None, output_format='simple', auto_compile=True)
                     keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in desired_output_layers}  # indexed by layer num
 
                     torch_layer_outs, diffs = pytorch_model(**torch_inputs, debug_activations=keras_layer_outs)  # indexed by layer num
-                    keras_layer_outs = {k: v for k, v in keras_layer_outs.items() if k in torch_layer_outs.keys()}  # indexed by layer num
                     # outs_onnx = onnxruntime_model.run(output_names, onnx_inputs)[0]
 
                     recurrent_state_torch = torch_layer_outs[:, POSE:]
                     recurrent_state_keras = keras_layer_outs['outputs'][:, POSE:]
                     # recurrent_state_onnx = outs_onnx[:, POSE:]
 
-                    errors_by_op_type[batch_size].append({})
+                    errors_logs[batch_size].append({})
 
                     for node_num, diff in diffs.items():
 
@@ -400,14 +411,14 @@ if __name__ == '__main__':
 
                         # save diff
                         node_op = node_nums_to_node[node_num].op_type
-                        if node_op not in errors_by_op_type[batch_size][-1]:
-                            errors_by_op_type[batch_size][-1][node_op] = []
-                        errors_by_op_type[batch_size][-1][node_op].append(diff)
+                        if node_op not in errors_logs[batch_size][-1]:
+                            errors_logs[batch_size][-1][node_op] = []
+                        errors_logs[batch_size][-1][node_op].append(diff)
 
                         # TODO: plot diff for each node in time
 
                     torch_outs = torch_layer_outs.detach().cpu().numpy()
-                    keras_outs = keras_layer_outs['outputs'].numpy()
+                    keras_outs = keras_layer_outs['outputs']
                 else:
                     torch_outs = pytorch_model(**torch_inputs)
                     keras_outs = keras_model(keras_inputs)
@@ -440,9 +451,11 @@ if __name__ == '__main__':
 
             break
 
-    if debug:
-        plot_errors_by_op_type(errors_by_op_type, batch_sizes, 'errors_by_op_type.png')
 
-    plot_model_preds(model_logs, seq_len, batch_sizes)
+
+    if debug:
+        plot_errors_logs(errors_logs, batch_sizes, 'errors_by_op.png')
+
+    # plot_model_preds(model_logs, seq_len, batch_sizes)
 
     printf('DONE')
