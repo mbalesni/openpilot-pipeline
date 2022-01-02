@@ -124,6 +124,8 @@ class CommaDataset(IterableDataset):
 
                 if not self.single_frame_batches:
                     yuv_frame_seq = np.zeros((self.seq_len + 1, 1311, 1164), dtype=np.uint8)
+                    bgr_frame_seq = np.zeros((self.seq_len, 874, 1164, 3), dtype=np.uint8)
+
                     yuv_frame_seq[0] = yuv_frame2
 
 
@@ -138,7 +140,8 @@ class CommaDataset(IterableDataset):
 
                     if self.single_frame_batches:
                         prepared_frames = transform_frames([yuv_frame1, yuv_frame2], timing)
-                    else: 
+                    else:
+                        bgr_frame_seq[t_idx-1] = frame2
                         yuv_frame_seq[t_idx] = yuv_frame2
 
                     if self.single_frame_batches:
@@ -148,7 +151,7 @@ class CommaDataset(IterableDataset):
                         gt_plan = segment_gts['plans'][abs_t_idx]
                         gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
 
-                        yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, worker_id
+                        yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, frame2, worker_id
 
                 if not self.single_frame_batches:
                     prepared_frames = transform_frames(yuv_frame_seq)
@@ -162,7 +165,7 @@ class CommaDataset(IterableDataset):
                     gt_plan_seq = segment_gts['plans'][abs_t_indices]
                     gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                    yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, worker_id
+                    yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, bgr_frame_seq, worker_id
 
             segment_gts.close()
             segment_video.release()
@@ -271,8 +274,9 @@ class BatchDataLoader:
         gt_plan_prob = torch.stack([item[2] for item in batch])
         segment_finished = torch.tensor([item[3] for item in batch])
         sequence_finished = torch.tensor([item[4] for item in batch])
+        bgr_frames = torch.stack([item[5] for item in batch])
 
-        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
+        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, bgr_frames
 
     def __len__(self):
         return len(self.loader)
