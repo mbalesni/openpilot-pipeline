@@ -15,13 +15,9 @@ To do:: code refactoring, class summary and arguments description
 
 expansion factor of 6 for depthwise conv. in all the next residual layers
 [16,24,48,88,120,208,352] * 6 == num of filters in the respective residual layers
-
-Pytorch 1.7.1 has no efficient net implemented. 
 """
 
 # starting aggregation block
-
-
 class IntialAggregationBlock(nn.Module):
     def __init__(self, in_channels):
         super(IntialAggregationBlock, self).__init__()
@@ -41,9 +37,7 @@ class IntialAggregationBlock(nn.Module):
         x = self.elu(self.batchnorm1(self.conv1(x)))
         x = self.elu(self.batchnorm2(self.conv2(x)))
         x = self.batchnorm3(self.conv3(x))
-
         return x
-
 
 # starting residual block
 class InitialResBlock(nn.Module):
@@ -67,14 +61,10 @@ class InitialResBlock(nn.Module):
         x += identity
         return x
 
-
 """
 Combine Both 1_3_1 and 1_5_1 classes
 """
-
 # repititive residual block with (1x1) - (3x3) - (1x1) kernel
-
-
 class BottleneckBlock1_3_1(nn.Module):
     def __init__(self, in_channels, out_channels, d_pad, expansion=6):
         super(BottleneckBlock1_3_1, self).__init__()
@@ -103,8 +93,6 @@ class BottleneckBlock1_3_1(nn.Module):
         return x
 
 # reptitive block with (1x1) - (5x5) - (1x1) kernel
-
-
 class BottleneckBlock1_5_1(nn.Module):
     def __init__(self, in_channels, out_channels, d_pad, expansion=6):
         super(BottleneckBlock1_5_1, self).__init__()
@@ -164,8 +152,6 @@ class AggregationBlock(nn.Module):
         return x
 
 # Combined Resnet for conv features extraction
-
-
 class ConvFeatureExtractor(nn.Module):
     def __init__(self, filter_list, expansion, num_in_channels=12):
         super(ConvFeatureExtractor, self).__init__()
@@ -268,8 +254,6 @@ class ConvFeatureExtractor(nn.Module):
 Fully connected layers are GEMM operators in ONNX computation graph.
 """
 # GRU cell
-
-
 class GRUCell(nn.Module):
     def __init__(self, input_size, hidden_size):
         super(GRUCell, self).__init__()
@@ -299,7 +283,6 @@ class GRUCell(nn.Module):
 
         hidden_state = newgate + updategate * (init_state - newgate)
         return hidden_state
-
 
 class GRUModel(nn.Module):
     def __init__(self):
@@ -338,7 +321,6 @@ class GRUModel(nn.Module):
 
             return self.initialize_desire, self.initialize_traffic_convention, self.initialize_initial_state
 
-
 class CommanBranchOuputModule(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(CommanBranchOuputModule, self).__init__()
@@ -360,7 +342,6 @@ class CommanBranchOuputModule(nn.Module):
         x = self.fc4(x)
 
         return x
-
 
 class OutputHeads(nn.Module):
 
@@ -453,7 +434,6 @@ class OutputHeads(nn.Module):
         pose_pred = self.pose_layer(y)
         return path_pred_out, ll_pred_f, ll_prob, road_edg_pred_f, lead_car_pred, lead_prob_pred, desire_pred, meta1_pred, meta2_pred, pose_pred
 
-
 # Combined model
 class CombinedModel(nn.Module):
     def __init__(self, filters, expansion_rate, indim_outhead, outdim_outhead):
@@ -470,8 +450,28 @@ class CombinedModel(nn.Module):
             self.indim_outhead, self.outdim_outhead)
     """
     obtaining model group parameters as --> (conv_extractor, GRU, Output_heads)
-    """
-    def getGroupParams(self):
+    # """ # comment if want to use diff_lr. 
+    # def getGroupParams(self):oad_edg_pred1, road_edg_pred2), 2)
+    #     road_edg_pred_f = road_edg_pred.view(
+    #         -1, road_edg_pred.size()[1]*road_edg_pred.size()[2])
+    #     # lead car
+    #     lead_car_pred = self.lead_car_layer(x)
+    #     # lead prob
+    #     lead_prob_pred = self.lead_prob_layer(x)
+    #     # desire state
+    #     desire_pred = self.desire_layer(x)
+    #     # meta1
+    #     meta1_pred = self.meta_layer1(y)
+    #     # meta2
+    #     meta2_pred = self.meta_layer2(y)
+    #     # pose
+    #     pose_pred = self.pose_layer(y)
+    #     return path_pred_out, ll_pred_f, ll_prob, road_edg_pred_f, lead_car_pred, lead_prob_pred, desire_pred, meta1_pred, meta2_pred, pose_pred
+
+# Combined model
+class CombinedModel(nn.Module):
+    def __init__(self, filters, expansion_rate, indim_outhead, outdim_outhead):
+        super(CombinedModel, self).__init__()
         out_conv = []
         out_gru = []
         out_outheads = []

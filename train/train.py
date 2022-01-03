@@ -64,7 +64,7 @@ name = "onnx_gen_gt_comma_pipeline_" + date_it
 comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
 onnx_path = 'supercombo.onnx'
-n_workers = 20
+n_workers = 10
 lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
 diff_lr = False
 recurr_warmup = True
@@ -109,7 +109,7 @@ if "onnx" in name:
                         prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
     val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
     val_loader = BackgroundGenerator(val_loader)
-
+    
 ##Load model 
 """
 Both the model from scratch and the onnx-pytorch model can be used 
@@ -165,7 +165,7 @@ def load_model(params_scratch, pathplan):
 comma_model = load_model(param_scratch_model, pathplan_layer_names)
 comma_model = comma_model.to(device)
 
-# # wandb.watch(comma_model) # Log the network weight histograms
+# wandb.watch(comma_model) # Log the network weight histograms
 
 #allowing grad only for path_plan
 for name, param in comma_model.named_parameters():
@@ -205,6 +205,7 @@ else:
                                                  cooldown=lrs_cd)                               
 
 #Loss functions:
+
 def mean_std(array):
     mean = array[:,0,:,:]
     std = array[:,1,:,:]
@@ -221,17 +222,17 @@ def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size):
     path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
     path_plans =  plan_pred
     path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+
     path_dict["path_prob"] = []
-    path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
-    path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
-    path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
-    path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path1"] = path1[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path2"] = path2[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path3"] = path3[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path4"] = path4[:,:-1].clone().reshape(batch_size,2,33,15)
     path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
     path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
                     path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
     
     #naive path_loss---> train all the paths together
-
     path1_gt = plan_gt[:,0,:,:,:] 
     path2_gt = plan_gt[:,1,:,:,:]
     path3_gt = plan_gt[:,2,:,:,:]
@@ -412,15 +413,16 @@ for epoch in tqdm(range(epochs)):
             optimizer.zero_grad()
             
             batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+
   
+
             for i in range(batch_size):
             # recurr_state = recurrent_state.clone()
             
                 inputs_to_pretained_model = {"input_imgs":input[i],
                                             "desire": desire,
                                             "traffic_convention":traffic_convention,
-                                            "initial_state": recurr_state}
-                
+   
                 outputs = comma_model(**inputs_to_pretained_model) 
                 plan_predictions = outputs[:,:4955].clone()
                 recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
@@ -498,6 +500,3 @@ for epoch in tqdm(range(epochs)):
 # PATH = "./nets/model_itr/" +name + ".pth" 
 # torch.save(comma_model.state_dict(), PATH)
 # print( "Saved trained model" )
-
-
-# if "__name__" == "__main__":
