@@ -1,4 +1,4 @@
-from common.transformations.camera import normalize
+from common.transformations.camera import normalize, get_view_frame_from_calib_frame
 from common.transformations.model import medmodel_intrinsics
 import common.transformations.orientation as orient
 import numpy as np
@@ -19,6 +19,10 @@ eon_intrinsics = np.array([
     [0.,    0.,     1.]])
 
 
+def printf(*args, **kwargs):
+    print(flush=True, *args, **kwargs)
+
+
 def transform_img(base_img,
                   augment_trans=np.array([0, 0, 0]),
                   augment_eulers=np.array([0, 0, 0]),
@@ -31,7 +35,7 @@ def transform_img(base_img,
                   alpha=1.0,
                   beta=0,
                   blur=0):
-    import cv2  # pylint: disable=import-error
+    # import cv2  # pylint: disable=import-error
     cv2.setNumThreads(1)
 
     if yuv:
@@ -45,9 +49,9 @@ def transform_img(base_img,
 
     def get_M(h=1.22):
         quadrangle = np.array([[0, cy + 20],
-                               [size[1]-1, cy + 20],
-                               [0, size[0]-1],
-                               [size[1]-1, size[0]-1]], dtype=np.float32)
+                            [size[1]-1, cy + 20],
+                            [0, size[0]-1],
+                            [size[1]-1, size[0]-1]], dtype=np.float32)
         quadrangle_norm = np.hstack((normalize(quadrangle, intrinsics=from_intr), np.ones((4, 1))))
         quadrangle_world = np.column_stack((h*quadrangle_norm[:, 0]/quadrangle_norm[:, 1],
                                             h*np.ones(4),
@@ -57,7 +61,7 @@ def transform_img(base_img,
         to_KE = to_intr.dot(to_extrinsics)
         warped_quadrangle_full = np.einsum('jk,ik->ij', to_KE, np.hstack((quadrangle_world, np.ones((4, 1)))))
         warped_quadrangle = np.column_stack((warped_quadrangle_full[:, 0]/warped_quadrangle_full[:, 2],
-                                             warped_quadrangle_full[:, 1]/warped_quadrangle_full[:, 2])).astype(np.float32)
+                                            warped_quadrangle_full[:, 1]/warped_quadrangle_full[:, 2])).astype(np.float32)
         M = cv2.getPerspectiveTransform(quadrangle, warped_quadrangle.astype(np.float32))
         return M
 
@@ -74,8 +78,9 @@ def transform_img(base_img,
         augmented_rgb[:cyy] = cv2.warpPerspective(base_img, M, (output_size[0], cyy), borderMode=cv2.BORDER_REPLICATE)
 
     # brightness and contrast augment
-    augmented_rgb = np.clip((float(alpha)*augmented_rgb + beta), 0, 255).astype(np.uint8)
+    # augmented_rgb = np.clip((float(alpha)*augmented_rgb + beta), 0, 255).astype(np.uint8)
 
+    # print('after clip:', augmented_rgb.shape, augmented_rgb.dtype)
     # gaussian blur
     if blur > 0:
         augmented_rgb = cv2.GaussianBlur(augmented_rgb, (blur*2+1, blur*2+1), cv2.BORDER_DEFAULT)
@@ -84,6 +89,7 @@ def transform_img(base_img,
         augmented_img = cv2.cvtColor(augmented_rgb, cv2.COLOR_RGB2YUV_I420)
     else:
         augmented_img = augmented_rgb
+
     return augmented_img
 
 
@@ -127,8 +133,20 @@ def load_calibration(segment_path):
 
 def bgr_to_yuv(img_bgr):
     img_yuv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YUV_I420)
-    img_yuv = img_yuv.reshape((874*3//2, 1164))
+    assert img_yuv.shape == ((874*3//2, 1164))
     return img_yuv
+
+
+def bgr_to_rgb(bgr):
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def yuv_to_rgb(yuv):
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB_I420)
+
+
+def rgb_to_yuv(rgb):
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
 
 
 def transform_frames(frames):
@@ -140,7 +158,78 @@ def transform_frames(frames):
                                           yuv=True,
                                           output_size=(512, 256))
 
-    return np.array(reshape_yuv(imgs_med_model)).astype(np.float32)
+    reshaped = reshape_yuv(imgs_med_model)
+
+    return reshaped
+
+
+class Calibration:
+    def __init__(self, rpy, intrinsic=eon_intrinsics, plot_img_width=640, plot_img_height=480):
+        self.intrinsic = intrinsic
+        self.extrinsics_matrix = get_view_frame_from_calib_frame(rpy[0], rpy[1], rpy[2], 0)[:, :3]
+        self.plot_img_width = plot_img_width
+        self.plot_img_height = plot_img_height
+        self.zoom = W / plot_img_width
+        self.CALIB_BB_TO_FULL = np.asarray([
+            [self.zoom, 0., 0.],
+            [0., self.zoom, 0.],
+            [0., 0., 1.]])
+
+    def car_space_to_ff(self, x, y, z):
+        car_space_projective = np.column_stack((x, y, z)).T
+        ep = self.extrinsics_matrix.dot(car_space_projective)
+        kep = self.intrinsic.dot(ep)
+        return (kep[:-1, :] / kep[-1, :]).T
+
+    def car_space_to_bb(self, x, y, z):
+        pts = self.car_space_to_ff(x, y, z)
+        return pts / self.zoom
+
+
+def project_path(path, calibration, z_off=1.22):
+    '''Projects paths from calibration space (model input/output) to image space.'''
+
+    x = path[:, 0]
+    y = path[:, 1]
+    z = path[:, 2] + z_off
+    pts = calibration.car_space_to_bb(x, y, z)
+    pts[pts < 0] = np.nan
+    valid = np.isfinite(pts).all(axis=1)
+    pts = pts[valid].astype(int)
+
+    return pts
+
+
+def create_img_plot_canvas(img_rgb, calibration):
+    img_plot = np.zeros((calibration.plot_img_height, calibration.plot_img_width, 3), dtype='uint8')
+    zoom_matrix = calibration.CALIB_BB_TO_FULL
+    cv2.warpAffine(img_rgb, zoom_matrix[:2], (img_plot.shape[1], img_plot.shape[0]), dst=img_plot, flags=cv2.WARP_INVERSE_MAP)
+    return img_plot
+
+
+def draw_path(calib_path, img_plot, calibration, width=1, height=1.22, fill_color=(128, 0, 255), line_color=(0, 255, 0)):
+    '''Draw a path plan on an image.'''    
+
+    overlay = img_plot.copy()
+    alpha = 0.4
+
+    calib_path_l = calib_path - np.array([0, width, 0])
+    calib_path_r = calib_path + np.array([0, width, 0])
+
+    img_pts_l = project_path(calib_path_l, calibration, z_off=height)
+    img_pts_r = project_path(calib_path_r, calibration, z_off=height)
+
+    for i in range(1, len(img_pts_l)):
+        u1, v1, u2, v2 = np.append(img_pts_l[i-1], img_pts_r[i-1])
+        u3, v3, u4, v4 = np.append(img_pts_l[i], img_pts_r[i])
+        pts = np.array([[u1, v1], [u2, v2], [u4, v4], [u3, v3]], np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(overlay, [pts], fill_color)
+        cv2.polylines(overlay, [pts], True, line_color)
+
+
+    img_plot = cv2.addWeighted(overlay, alpha, img_plot, 1 - alpha, 0)
+
+    return img_plot
 
 
 def get_train_imgs(path_to_segment, video_file='fcamera.hevc', gt_file='ground_truths.npz'):
