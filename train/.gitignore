@@ -6,5 +6,5 @@ gtdata.npz
 inputdata.npz
 *.out
 *.txt
-
-
+echo 
+wandb
