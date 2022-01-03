@@ -93,7 +93,9 @@ class CommaDataset(IterableDataset):
         cores_per_worker = os.cpu_count() // num_workers
 
         # force the process to be gentle, i.e. use no more than `cores_per_worker` cores instead of all
-        subprocess.check_output(f'taskset -pc {worker_id*cores_per_worker}-{worker_id*cores_per_worker+cores_per_worker-1} {worker_pid}', shell=True)
+        
+        ### uncomment the below line for making the dataloader more efficient.
+        #subprocess.check_output(f'taskset -pc {worker_id*cores_per_worker}-{worker_id*cores_per_worker+cores_per_worker-1} {worker_pid}', shell=True)
 
         for segment_vidx in range(worker_id, len(self.segment_indices), num_workers):
 

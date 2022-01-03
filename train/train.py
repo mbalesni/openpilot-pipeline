@@ -12,6 +12,8 @@ from model import *
 from onnx2pytorch import ConvertModel
 import onnx
 import wandb
+from timing import *
+
 torch.autograd.set_detect_anomaly(True)
 
 cuda = torch.cuda.is_available()
@@ -50,6 +52,7 @@ class Logger:
                     "{}_Time".format( self.prefix ): time,
                     "{}_lr".format( self.prefix ): lr},
                     step=self.cur_ep )
+    
 
 ## intializing the object of the logger class 
 print("=>intialzing wandb Logger class")
@@ -130,7 +133,7 @@ pathplan_layer_names  = ["Gemm_959", "Gemm_981","Gemm_983","Gemm_1036"]
 print("=>Loading the model")
 print("=>model used:",args.modeltype)
 
-def load_model(params_scratch, pathplan):
+def load_model(params_scratch, pathplan, batch_size):
 
     if args.modeltype == 'scratch':
         model = CombinedModel(params_scratch[0], params_scratch[1],
@@ -140,18 +143,18 @@ def load_model(params_scratch, pathplan):
         model = ConvertModel(onnx_model, experimental= True)  #pretrained_model
         
         ##hack to enable batch_size>1 for onnx2pytorch for our case :TODO-- results differ in onnxruntime--keras and onnx2pytorch
-        model.Constant_1047.constant = torch.tensor((2,2,66))
-        model.Reshape_1048.shape = (2,2,66)
-        model.Constant_1049.constant = torch.tensor((2,2,66))
-        model.Reshape_1050.shape = (2,2,66)
-        model.Constant_1051.constant = torch.tensor((2,2,66))
-        model.Reshape_1052.shape = (2,2,66)
-        model.Constant_1053.constant = torch.tensor((2,2,66))
-        model.Reshape_1054.shape = (2,2,66)
-        model.Constant_1057.constant = torch.tensor((2,2,66))
-        model.Reshape_1058.shape = (2,2,66)
-        model.Constant_1059.constant = torch.tensor((2,2,66))
-        model.Reshape_1060.shape = (2,2,66)
+        model.Constant_1047.constant = torch.tensor((batch_size,2,66))
+        model.Reshape_1048.shape = (batch_size,2,66)
+        model.Constant_1049.constant = torch.tensor((batch_size,2,66))
+        model.Reshape_1050.shape = (batch_size,2,66)
+        model.Constant_1051.constant = torch.tensor((batch_size,2,66))
+        model.Reshape_1052.shape = (batch_size,2,66)
+        model.Constant_1053.constant = torch.tensor((batch_size,2,66))
+        model.Reshape_1054.shape = (batch_size,2,66)
+        model.Constant_1057.constant = torch.tensor((batch_size,2,66))
+        model.Reshape_1058.shape = (batch_size,2,66)
+        model.Constant_1059.constant = torch.tensor((batch_size,2,66))
+        model.Reshape_1060.shape = (batch_size,2,66)
 
         def reinitialise_weights(layer_weight):
             model.layer_weight = torch.nn.Parameter(torch.nn.init.xavier_uniform_(layer_weight))
@@ -374,16 +377,16 @@ Note: other loss functions to be used while training other output heads
 
 # batchsize in this case is 1 as init recurr, desire and traffic conv reamain same. 
 # initializing recurrent state by zeros
-recurr_state = torch.zeros(1,512,dtype = torch.float32)
+recurr_state = torch.zeros(batch_size,512,dtype = torch.float32)
 recurr_state = recurr_state.requires_grad_(True).to(device)
 
 # desire and traffic convention is also set to zero
-desire = torch.zeros(1,8,dtype = torch.float32, requires_grad= True)
+desire = torch.zeros(batch_size,8,dtype = torch.float32, requires_grad= True)
 desire = desire.requires_grad_(True).to(device)
 
 #LHD
-traffic_convention = torch.zeros(1,2, dtype = torch.float32)
-traffic_convention[0][1] =1 
+traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
+traffic_convention[:,1] =1 
 traffic_convention = traffic_convention.requires_grad_(True).to(device)
 
 
@@ -394,54 +397,60 @@ traffic_convention = traffic_convention.requires_grad_(True).to(device)
 #     wandb.config.seed = seed   
 for epoch in tqdm(range(epochs)):
 
-    start_point = time.time()
-
     tr_loss = 0.0
     run_loss = 0.0
 
-    for tr_it , data in tqdm(enumerate(train_loader)):
+    for tr_it , batch in tqdm(enumerate(train_loader)):
         if args.datatype == "gen_gt" and args.modeltype == "onnx2torch":
             
             print("Begin training")    
             
-            input, labels = data
-
-
-            input = input.to(device)
-            labels_path = labels[0].to(device)
-            labels_path_prob = labels[1].to(device)
+            stacked_frames, plans, plans_probs, segment_finished, sequence_finished, bgr_frames = batch
+            
+            input = stacked_frames.to(device) # -- (batch_size, seq_len, 12, 128,256)
+            labels_path = plans.to(device) # -- (batch_size,seq_len,5,2,33,15)
+            labels_path_prob = plans_probs.to(device) # -- (batch_size,seq_len,5,1)
+            
             optimizer.zero_grad()
             
             batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
 
   
-
-            for i in range(batch_size):
+            for i in range(seq_len):
             # recurr_state = recurrent_state.clone()
             
-                inputs_to_pretained_model = {"input_imgs":input[i],
+                inputs_to_pretained_model = {"input_imgs":input[:,i,:,:,:],
                                             "desire": desire,
                                             "traffic_convention":traffic_convention,
+                                            'initial_state': recurr_state
+                }
    
-                outputs = comma_model(**inputs_to_pretained_model) 
-                plan_predictions = outputs[:,:4955].clone()
-                recurr = outputs[:,5960:].clone() ## important to refeed state of GRU
+                outputs = comma_model(**inputs_to_pretained_model) # -- > [32,6472]
 
-                single_itr_loss = path_plan_loss(plan_predictions, labels_path[i], labels_path_prob[i], 1)
-                if i == batch_size -1:
+                plan_predictions = outputs[:,:4955].clone() # -- > [32,4955]
+                
+                recurr = outputs[:,5960:].clone() #-- > [32,512] important to refeed state of GRU
+                
+                #labels_path_prob[:,i,:,:] -- > [32,5,1]
+                # labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                
+                single_batch_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:,:], batch_size)
+                
+                if i == seq_len -1:
                     recurr = recurr
                 else:   
                     recurr_state = recurr
 
-                batch_loss += single_itr_loss
-            batch_loss  = batch_loss/batch_size # mean of losses of samples in batch
+                batch_loss += single_batch_loss
+            batch_loss  = batch_loss/seq_len # mean of losses over batches of sequences
             
             # recurrent warmup
             if recurr_warmup and epoch == 0 and tr_it>10:
                 batch_loss = batch_loss 
             else: 
                 batch_loss.backward(retain_graph = True)
-            loss_cpu = batch_loss.detach().clone().item() ## this is the loss for one batch in one interation
+
+            loss_cpu = batch_loss.detach().clone().item() ## loss for one iteration
             
             recurr_state = recurr
             tr_loss += loss_cpu
