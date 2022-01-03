@@ -1,4 +1,4 @@
-from common.transformations.camera import normalize
+from common.transformations.camera import normalize, get_view_frame_from_calib_frame
 from common.transformations.model import medmodel_intrinsics
 import common.transformations.orientation as orient
 import numpy as np
@@ -161,6 +161,75 @@ def transform_frames(frames):
     reshaped = reshape_yuv(imgs_med_model)
 
     return reshaped
+
+
+class Calibration:
+    def __init__(self, rpy, intrinsic=eon_intrinsics, plot_img_width=640, plot_img_height=480):
+        self.intrinsic = intrinsic
+        self.extrinsics_matrix = get_view_frame_from_calib_frame(rpy[0], rpy[1], rpy[2], 0)[:, :3]
+        self.plot_img_width = plot_img_width
+        self.plot_img_height = plot_img_height
+        self.zoom = W / plot_img_width
+        self.CALIB_BB_TO_FULL = np.asarray([
+            [self.zoom, 0., 0.],
+            [0., self.zoom, 0.],
+            [0., 0., 1.]])
+
+    def car_space_to_ff(self, x, y, z):
+        car_space_projective = np.column_stack((x, y, z)).T
+        ep = self.extrinsics_matrix.dot(car_space_projective)
+        kep = self.intrinsic.dot(ep)
+        return (kep[:-1, :] / kep[-1, :]).T
+
+    def car_space_to_bb(self, x, y, z):
+        pts = self.car_space_to_ff(x, y, z)
+        return pts / self.zoom
+
+
+def project_path(path, calibration, z_off=1.22):
+    '''Projects paths from calibration space (model input/output) to image space.'''
+
+    x = path[:, 0]
+    y = path[:, 1]
+    z = path[:, 2] + z_off
+    pts = calibration.car_space_to_bb(x, y, z)
+    pts[pts < 0] = np.nan
+    valid = np.isfinite(pts).all(axis=1)
+    pts = pts[valid].astype(int)
+
+    return pts
+
+
+def create_img_plot_canvas(img_rgb, calibration):
+    img_plot = np.zeros((calibration.plot_img_height, calibration.plot_img_width, 3), dtype='uint8')
+    zoom_matrix = calibration.CALIB_BB_TO_FULL
+    cv2.warpAffine(img_rgb, zoom_matrix[:2], (img_plot.shape[1], img_plot.shape[0]), dst=img_plot, flags=cv2.WARP_INVERSE_MAP)
+    return img_plot
+
+
+def draw_path(calib_path, img_plot, calibration, width=1, height=1.22, fill_color=(128, 0, 255), line_color=(0, 255, 0)):
+    '''Draw a path plan on an image.'''    
+
+    overlay = img_plot.copy()
+    alpha = 0.4
+
+    calib_path_l = calib_path - np.array([0, width, 0])
+    calib_path_r = calib_path + np.array([0, width, 0])
+
+    img_pts_l = project_path(calib_path_l, calibration, z_off=height)
+    img_pts_r = project_path(calib_path_r, calibration, z_off=height)
+
+    for i in range(1, len(img_pts_l)):
+        u1, v1, u2, v2 = np.append(img_pts_l[i-1], img_pts_r[i-1])
+        u3, v3, u4, v4 = np.append(img_pts_l[i], img_pts_r[i])
+        pts = np.array([[u1, v1], [u2, v2], [u4, v4], [u3, v3]], np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(overlay, [pts], fill_color)
+        cv2.polylines(overlay, [pts], True, line_color)
+
+
+    img_plot = cv2.addWeighted(overlay, alpha, img_plot, 1 - alpha, 0)
+
+    return img_plot
 
 
 def get_train_imgs(path_to_segment, video_file='fcamera.hevc', gt_file='ground_truths.npz'):
