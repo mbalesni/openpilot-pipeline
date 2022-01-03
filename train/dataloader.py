@@ -3,7 +3,7 @@ import numpy as np
 from tqdm import tqdm
 import h5py
 import glob
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import IterableDataset, DataLoader, Dataset
 import os
 import cv2
 import math
@@ -305,8 +305,56 @@ class BackgroundGenerator(threading.Thread):
         except (ConnectionResetError, ConnectionRefusedError):
             self.stop()
             raise StopIteration
+"""
+Loader for visualization
+"""
 
+def prepare_frames(frame1, frame2):
+    yuv_frame1 = bgr_to_yuv(frame1)
+    yuv_frame2 = bgr_to_yuv(frame2)
+    list_yuv_frame = [yuv_frame1, yuv_frame2]
 
+    prepared_frames = transform_frames(list_yuv_frame)
+    # print(prepared_frames[0].shape)
+    stack_frames = np.zeros((1,12,128,256))
+    stack_frames = (np.vstack((prepared_frames[0], prepared_frames[1]))).reshape(1,12,128,256)
+    # print(stack_frames.shape)
+
+    return stack_frames 
+
+class viz_loader(Dataset):
+    def __init__(self, video_path):
+        super(viz_loader, self).__init__()
+        
+        self.video_path = video_path
+        self.yuv_frames = []
+        self.RGB_frames = []
+        filelist = os.listdir(self.video_path)
+        filelist = sorted(filelist,key=lambda x: int(os.path.splitext(x)[0])) 
+        
+        for i in range(len(filelist) -1):
+            path_frame1 = os.path.join(self.video_path, filelist[i])
+            path_frame2 = os.path.join(self.video_path,filelist[i+1])
+            
+            frame_1 =cv2.imread(path_frame1)
+            frame_2 = cv2.imread(path_frame2)
+#             print(frame_1.shape)
+#             print(frame_2.shape)
+            
+            stacked_yuv_frames = prepare_frames(frame_1, frame_2)
+            self.yuv_frames.append(stacked_yuv_frames)
+            self.RGB_frames.append(frame_2)
+#         print(len(self.yuv_frames))
+    def __len__(self):
+        return len(self.yuv_frames)
+
+    def __getitem__(self, index):
+        
+        yuv_data = self.yuv_frames[index]
+        yuv_data = torch.from_numpy(yuv_data)
+        rgb_data  = self.RGB_frames[index]
+        return yuv_data, rgb_data
+    
 if __name__ == "__main__":
 
     if len(sys.argv) >= 2:
