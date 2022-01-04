@@ -155,6 +155,7 @@ def load_model(params_scratch, pathplan, batch_size):
         model.Reshape_1058.shape = (batch_size,2,66)
         model.Constant_1059.constant = torch.tensor((batch_size,2,66))
         model.Reshape_1060.shape = (batch_size,2,66)
+        model.Elu_907.inplace = False
 
         def reinitialise_weights(layer_weight):
             model.layer_weight = torch.nn.Parameter(torch.nn.init.xavier_uniform_(layer_weight))
