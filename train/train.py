@@ -103,7 +103,7 @@ if "onnx" in name:
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
                         prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
-    train_loader = BackgroundGenerator(train_loader)
+    # train_loader = BackgroundGenerator(train_loader)
 
     #val_lodaer 
     val_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len, validation=True,
@@ -165,7 +165,7 @@ def load_model(params_scratch, pathplan, batch_size):
                 layer.bias.data.fill_(0.01)     
     return model 
 
-comma_model = load_model(param_scratch_model, pathplan_layer_names)
+comma_model = load_model(param_scratch_model, pathplan_layer_names,batch_size)
 comma_model = comma_model.to(device)
 
 # wandb.watch(comma_model) # Log the network weight histograms
@@ -208,7 +208,6 @@ else:
                                                  cooldown=lrs_cd)                               
 
 #Loss functions:
-
 def mean_std(array):
     mean = array[:,0,:,:]
     std = array[:,1,:,:]
@@ -270,6 +269,165 @@ def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size):
     path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
     
     return path_plan_loss
+
+
+### train loop 
+
+# batchsize in this case is 1 as init recurr, desire and traffic conv reamain same. 
+# initializing recurrent state by zeros
+recurr_state = torch.zeros(batch_size,512,dtype = torch.float32)
+recurr_state = recurr_state.requires_grad_(True).to(device)
+
+# desire and traffic convention is also set to zero
+desire = torch.zeros(batch_size,8,dtype = torch.float32, requires_grad= True)
+desire = desire.requires_grad_(True).to(device)
+
+#LHD
+traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
+traffic_convention[:,1] =1 
+traffic_convention = traffic_convention.requires_grad_(True).to(device)
+
+
+# with run:
+#     wandb.config.lr = lr
+#     wandb.config.l2 = l2_lambda
+#     wandb.config.lrs = str(scheduler)
+#     wandb.config.seed = seed   
+for epoch in tqdm(range(epochs)):
+    
+    start_point = time.time()
+    tr_loss = 0.0
+    run_loss = 0.0
+
+    comma_model.train()
+
+    for tr_it , batch in tqdm(enumerate(train_loader)):
+        if args.datatype == "gen_gt" and args.modeltype == "onnx2torch":
+            
+            print("Begin training")    
+            
+            stacked_frames, plans, plans_probs, segment_finished, sequence_finished, bgr_frames = batch
+            
+            input = stacked_frames.to(device) # -- (batch_size, seq_len, 12, 128,256)
+            labels_path = plans.to(device) # -- (batch_size,seq_len,5,2,33,15)
+            labels_path_prob = plans_probs.to(device) # -- (batch_size,seq_len,5,1)
+            
+            optimizer.zero_grad()
+            
+            batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+
+            for i in range(seq_len):
+            # recurr_state = recurrent_state.clone()
+            
+                inputs_to_pretained_model = {"input_imgs":input[:,i,:,:,:],
+                                            "desire": desire,
+                                            "traffic_convention":traffic_convention,
+                                            'initial_state': recurr_state
+                }
+   
+                outputs = comma_model(**inputs_to_pretained_model) # -- > [32,6472]
+
+                plan_predictions = outputs[:,:4955].clone() # -- > [32,4955]
+                
+                recurr = outputs[:,5960:].clone() #-- > [32,512] important to refeed state of GRU
+                
+                #labels_path_prob[:,i,:,:] -- > [32,5,1]
+                # labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                
+                single_batch_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:,:], batch_size)
+                
+                if i == seq_len -1:
+                    recurr = recurr
+                else:   
+                    recurr_state = recurr
+
+                batch_loss += single_batch_loss
+            batch_loss  = batch_loss/seq_len # mean of losses over batches of sequences
+            
+            # recurrent warmup
+            if recurr_warmup and epoch == 0 and tr_it>10:
+                batch_loss = batch_loss 
+            else: 
+                batch_loss.backward(retain_graph = True)
+
+            loss_cpu = batch_loss.detach().clone().item() ## loss for one iteration
+            
+            recurr_state = recurr
+            tr_loss += loss_cpu
+            run_loss += loss_cpu
+            optimizer.step()
+            
+            if (tr_it+1)%10 == 0:
+                print("printing the losses")
+                print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
+                if (tr_it+1) %100 == 0:
+                    # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
+                    scheduler.step(run_loss/100)
+                    run_loss =0.0
+                
+        # validation loop  
+            # with torch.no_grad(): ## saving memory by not accumulating activations
+            #     if (epoch +1) %check_val_epoch ==0:
+
+            #         """
+                    
+            #         Somewhere here i need to call for visualization. use the existing code to be used for visualization in vis.ipynb
+                    
+            #         """
+                    
+
+            #         val_st_pt = time.time()
+            #         val_loss_cpu = 0.0
+
+            #         comma_model.eval()
+
+            #         checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
+            #         torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
+                    
+            #         print(">>>>>validating<<<<<<<")
+
+            #         for val_itr, val_batch in enumerate(val_loader):
+
+            #             val_stacked_frames, val_plans, val_plans_probs, val_segment_finished, val_sequence_finished, val_bgr_frames = val_batch
+
+            #             val_input = val_stacked_frames.to(device)
+            #             val_label_path = val_plans.to(device)
+            #             val_label_path_prob = val_plans_probs.to(device)
+
+            #             val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+                        
+            #             for i in range(seq_len):
+            #                 val_inputs_to_pretained_model = {"input_imgs":val_input[:,i,:,:,:],
+            #                                         "desire": desire,
+            #                                         "traffic_convention":traffic_convention,
+            #                                         "initial_state": recurr_state}
+                        
+            #                 val_outputs = comma_model(**val_inputs_to_pretained_model) ## --> [32,6472]
+            #                 val_path_prediction = val_outputs[:,:4955].clone() ## --> [32,4955]
+
+            #                 # val_labels_path_prob[:,i,:,:] -- > [32,5,1]
+            #                 # val_labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                
+            #                 single_val_loss = path_plan_loss(val_path_prediction,val_label_path[:,i,:,:,:,:], val_label_path_prob[:,i,:,:], batch_size)
+            #                 val_batch_loss += single_val_loss
+                        
+            #             val_batch_loss = val_batch_loss/batch_size
+            #             val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
+
+            #             if (val_itr+1)%10 == 0:
+            #                 print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+
+            #         print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
+            #         # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
+                        
+    print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}, time_per_epoch: {time.time() - start_point}")
+    # tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups[0]['lr'], time.time() - start_point )
+
+# PATH = "./nets/model_itr/" +name + ".pth" 
+# torch.save(comma_model.state_dict(), PATH)
+# print( "Saved trained model" )
+
+
 
 """
 Note: other loss functions to be used while training other output heads
@@ -372,140 +530,3 @@ Note: other loss functions to be used while training other output heads
 # pose_gt_dist_obj =  torch.distributions.normal.Normal(mean_pose_gt, std_pose_gt)
 # pose_loss = torch.distributions.kl.kl_divergence(pose_pred_dist_obj, pose_gt_dist_obj)
 # pose_loss = pose_loss.sum(dim=1).mean(dim=0)
-
-### train loop 
-
-# batchsize in this case is 1 as init recurr, desire and traffic conv reamain same. 
-# initializing recurrent state by zeros
-recurr_state = torch.zeros(batch_size,512,dtype = torch.float32)
-recurr_state = recurr_state.requires_grad_(True).to(device)
-
-# desire and traffic convention is also set to zero
-desire = torch.zeros(batch_size,8,dtype = torch.float32, requires_grad= True)
-desire = desire.requires_grad_(True).to(device)
-
-#LHD
-traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
-traffic_convention[:,1] =1 
-traffic_convention = traffic_convention.requires_grad_(True).to(device)
-
-
-# with run:
-#     wandb.config.lr = lr
-#     wandb.config.l2 = l2_lambda
-#     wandb.config.lrs = str(scheduler)
-#     wandb.config.seed = seed   
-for epoch in tqdm(range(epochs)):
-
-    tr_loss = 0.0
-    run_loss = 0.0
-
-    for tr_it , batch in tqdm(enumerate(train_loader)):
-        if args.datatype == "gen_gt" and args.modeltype == "onnx2torch":
-            
-            print("Begin training")    
-            
-            stacked_frames, plans, plans_probs, segment_finished, sequence_finished, bgr_frames = batch
-            
-            input = stacked_frames.to(device) # -- (batch_size, seq_len, 12, 128,256)
-            labels_path = plans.to(device) # -- (batch_size,seq_len,5,2,33,15)
-            labels_path_prob = plans_probs.to(device) # -- (batch_size,seq_len,5,1)
-            
-            optimizer.zero_grad()
-            
-            batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
-
-  
-            for i in range(seq_len):
-            # recurr_state = recurrent_state.clone()
-            
-                inputs_to_pretained_model = {"input_imgs":input[:,i,:,:,:],
-                                            "desire": desire,
-                                            "traffic_convention":traffic_convention,
-                                            'initial_state': recurr_state
-                }
-   
-                outputs = comma_model(**inputs_to_pretained_model) # -- > [32,6472]
-
-                plan_predictions = outputs[:,:4955].clone() # -- > [32,4955]
-                
-                recurr = outputs[:,5960:].clone() #-- > [32,512] important to refeed state of GRU
-                
-                #labels_path_prob[:,i,:,:] -- > [32,5,1]
-                # labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
-                
-                single_batch_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:,:], batch_size)
-                
-                if i == seq_len -1:
-                    recurr = recurr
-                else:   
-                    recurr_state = recurr
-
-                batch_loss += single_batch_loss
-            batch_loss  = batch_loss/seq_len # mean of losses over batches of sequences
-            
-            # recurrent warmup
-            if recurr_warmup and epoch == 0 and tr_it>10:
-                batch_loss = batch_loss 
-            else: 
-                batch_loss.backward(retain_graph = True)
-
-            loss_cpu = batch_loss.detach().clone().item() ## loss for one iteration
-            
-            recurr_state = recurr
-            tr_loss += loss_cpu
-            run_loss += loss_cpu
-            optimizer.step()
-            
-            if (tr_it+1)%10 == 0:
-                print("printing the losses")
-                print(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
-                if (tr_it+1) %100 == 0:
-                    # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
-                    scheduler.step(run_loss/100)
-                    run_loss =0.0
-                
-        # # validation loop  
-        #     with torch.no_grad(): ## saving memory by not accumulating activations
-        #         if (epoch +1) %check_val_epoch ==0:
-        #             val_st_pt = time.time()
-        #             val_loss_cpu = 0.0
-        #             checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
-        #             torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
-        #             print(">>>>>validating<<<<<<<")
-
-        #             for val_itr, val_data in enumerate(val_loader):
-        #                 val_input,val_labels = val_data
-
-        #                 val_input = val_input.to(device)
-        #                 val_label_path = val_labels[0].to(device)
-        #                 val_label_path_prob = val_labels[1].to(device)
-        #                 val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
-                        
-        #                 for i in range(batch_size):
-        #                     val_inputs_to_pretained_model = {"input_imgs":val_input[i],
-        #                                             "desire": desire,
-        #                                             "traffic_convention":traffic_convention,
-        #                                             "initial_state": recurr_state}
-                        
-        #                     val_outputs = comma_model(**val_inputs_to_pretained_model)
-        #                     val_path_prediction = val_outputs[:,:4955].clone()
-
-        #                     single_val_loss = path_plan_loss(val_path_prediction,val_label_path[i], val_label_path_prob[i], 1)
-        #                     val_batch_loss += single_val_loss
-                        
-        #                 val_batch_loss = val_batch_loss/batch_size
-        #                 val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
-
-        #                 if (val_itr+1)%10 == 0:
-        #                     print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
-
-        #             print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
-        #             val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
-                        
-    print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}")
-    tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups[0]['lr'], time.time() - start_point )
-
-# PATH = "./nets/model_itr/" +name + ".pth" 
-# torch.save(comma_model.state_dict(), PATH)
-# print( "Saved trained model" )
