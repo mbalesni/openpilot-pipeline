@@ -18,7 +18,7 @@ import wandb
 from timing import Timing, MultiTiming, pprint_stats
 from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5
 import os
-from model import load_model
+from model import load_trainable_model
 import gc
 import sys
 import dotenv
@@ -40,17 +40,9 @@ def visualization(lanelines, roadedges, calib_path, im_rgb):
     plot_img_height, plot_img_width = 480, 640
 
     rpy_calib = [0, 0, 0]
-    X_IDXs = [
-        0.,   0.1875,   0.75,   1.6875,   3.,   4.6875,
-        6.75,   9.1875,  12.,  15.1875,  18.75,  22.6875,
-        27.,  31.6875,  36.75,  42.1875,  48.,  54.1875,
-        60.75,  67.6875,  75.,  82.6875,  90.75,  99.1875,
-        108., 117.1875, 126.75, 136.6875, 147., 157.6875,
-        168.75, 180.1875, 192.]
-
     calibration_pred = Calibration(rpy_calib, plot_img_width=plot_img_width, plot_img_height=plot_img_height)
     laneline_colors = [(255, 0, 0), (0, 255, 0), (255, 0, 255), (0, 255, 255)]
-    vis_image = draw_path(lanelines, roadedges, calib_path[0, :, :3], im_rgb, calibration_pred, X_IDXs, laneline_colors)
+    vis_image = draw_path(lanelines, roadedges, calib_path[0, :, :3], im_rgb, calibration_pred, laneline_colors)
 
     return vis_image
 
@@ -578,8 +570,8 @@ if __name__ == "__main__":
     printf('Validation visualization segment:', val_segment_for_viz)
 
     os.makedirs('tmp', exist_ok=True)
-    # shutil.copytree(train_segment_for_viz, 'tmp/train_segment_for_viz')
-    # shutil.copytree(val_segment_for_viz, 'tmp/val_segment_for_viz')
+    shutil.copytree(train_segment_for_viz, 'tmp/train_segment_for_viz', dirs_exist_ok=True)
+    shutil.copytree(val_segment_for_viz, 'tmp/val_segment_for_viz', dirs_exist_ok=True)
     train_segment_for_viz = 'tmp/train_segment_for_viz'
     val_segment_for_viz = 'tmp/val_segment_for_viz'
 
@@ -588,7 +580,7 @@ if __name__ == "__main__":
     printf('Batches in val_loader:', val_loader_len)
 
     printf("=>Loading the model")
-    comma_model = load_model(path_to_supercombo, trainable_layers=pathplan_layer_names)
+    comma_model = load_trainable_model(path_to_supercombo, trainable_layers=pathplan_layer_names)
     comma_model = comma_model.to(device)
 
     wandb.watch(comma_model) # Log the gradients  
