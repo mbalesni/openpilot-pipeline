@@ -186,7 +186,7 @@ class Calibration:
         return pts / self.zoom
 
 
-def project_path(path, calibration, z_off=1.22):
+def project_path(path, calibration, z_off):
     '''Projects paths from calibration space (model input/output) to image space.'''
 
     x = path[:, 0]
@@ -199,7 +199,6 @@ def project_path(path, calibration, z_off=1.22):
 
     return pts
 
-
 def create_img_plot_canvas(img_rgb, calibration):
     img_plot = np.zeros((calibration.plot_img_height, calibration.plot_img_width, 3), dtype='uint8')
     zoom_matrix = calibration.CALIB_BB_TO_FULL
@@ -207,26 +206,85 @@ def create_img_plot_canvas(img_rgb, calibration):
     return img_plot
 
 
-def draw_path(calib_path, img_plot, calibration, width=1, height=1.22, fill_color=(128, 0, 255), line_color=(0, 255, 0)):
+def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, lane_line_color_list, width=1, height=1.22, fill_color=(128, 0, 255), line_color=(0, 255, 0)):
+    
     '''Draw a path plan on an image.'''    
 
     overlay = img_plot.copy()
     alpha = 0.4
-
+    
+    #paths
     calib_path_l = calib_path - np.array([0, width, 0])
     calib_path_r = calib_path + np.array([0, width, 0])
-
+  
     img_pts_l = project_path(calib_path_l, calibration, z_off=height)
     img_pts_r = project_path(calib_path_r, calibration, z_off=height)
 
+    #lane_lines are sequentially parsed ::--> means--> std's
+    oll = lane_lines[0] 
+    ill = lane_lines[1]
+    irl = lane_lines[2] 
+    orl = lane_lines[3]
+        
+    idxs = np.array(X_IDXS)[:,np.newaxis]
+    
+    y_o_left , z_o_left = oll[:,::2].reshape(33,1), oll[:,1::2].reshape(33,1)
+    y_i_left , z_i_left = ill[:,::2].reshape(33,1), ill[:,1::2].reshape(33,1)
+    y_i_right , z_i_right = irl[:,::2].reshape(33,1), irl[:,1::2].reshape(33,1)
+    y_o_right , z_o_right = orl[:,::2].reshape(33,1), orl[:,1::2].reshape(33,1)
+    
+    calib_pts_oll = np.hstack((idxs,y_o_left,z_o_left))
+    calib_pts_ill = np.hstack((idxs,y_i_left,z_i_left))
+    calib_pts_irl = np.hstack((idxs,y_i_right,z_i_right))
+    calib_pts_orl = np.hstack((idxs,y_o_right,z_o_right))
+
+    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=height)
+    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=height)
+    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=height)
+    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=height)
+
+    img_pts_oll = img_pts_oll.reshape(-1,1,2)
+    img_pts_ill = img_pts_ill.reshape(-1,1,2)
+    img_pts_irl = img_pts_irl.reshape(-1,1,2)
+    img_pts_orl = img_pts_orl.reshape(-1,1,2)
+
+    #road edges
+    right_road_edg =road_edges[1] 
+    left_road_edg = road_edges[0]
+
+    y_l_edg , z_l_edg = left_road_edg[:,::2].reshape(33,1), left_road_edg[:,1::2].reshape(33,1)
+    y_r_edg , z_r_edg = right_road_edg[:,::2].reshape(33,1), right_road_edg[:,1::2].reshape(33,1)
+    
+    calib_pts_ledg = np.hstack((idxs,y_l_edg,z_l_edg))
+    calib_pts_redg = np.hstack((idxs,y_r_edg,z_r_edg))
+    
+    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=height)
+    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=height)
+    
+    img_pts_ledg = img_pts_ledg.reshape(-1,1,2)
+    img_pts_redg = img_pts_redg.reshape(-1,1,2)
+    # print("il:\n",img_pts_irl.shape)
+    # print("ir:\n",img_ptsi_rll[0:10,:,:])
+
+    # plot_path
     for i in range(1, len(img_pts_l)):
         u1, v1, u2, v2 = np.append(img_pts_l[i-1], img_pts_r[i-1])
         u3, v3, u4, v4 = np.append(img_pts_l[i], img_pts_r[i])
         pts = np.array([[u1, v1], [u2, v2], [u4, v4], [u3, v3]], np.int32).reshape((-1, 1, 2))
         cv2.fillPoly(overlay, [pts], fill_color)
         cv2.polylines(overlay, [pts], True, line_color)
+    
+    #plot lanelines
+    cv2.polylines(overlay,[img_pts_oll],False,lane_line_color_list[0],thickness=2)
+    cv2.polylines(overlay,[img_pts_ill],False,lane_line_color_list[1],thickness=2)
+    cv2.polylines(overlay,[img_pts_irl],False,lane_line_color_list[2],thickness=2)
+    cv2.polylines(overlay,[img_pts_orl],False,lane_line_color_list[3],thickness=2)
+    
+    #plot road_edges
+    cv2.polylines(overlay,[img_pts_ledg],False,(255,128,0),thickness=1)
+    cv2.polylines(overlay,[img_pts_redg],False,(255,234,0),thickness=1)
 
-
+    #drawing the plots on original iamge
     img_plot = cv2.addWeighted(overlay, alpha, img_plot, 1 - alpha, 0)
 
     return img_plot

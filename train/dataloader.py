@@ -353,7 +353,7 @@ class viz_loader(Dataset):
     def __getitem__(self, index):
         
         yuv_data = self.yuv_frames[index]
-        yuv_data = torch.from_numpy(yuv_data)
+        yuv_data = torch.from_numpy(yuv_data).float()
         rgb_data  = self.RGB_frames[index]
         return yuv_data, rgb_data
     
