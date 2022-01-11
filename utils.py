@@ -238,10 +238,10 @@ def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, 
     calib_pts_irl = np.hstack((idxs,y_i_right,z_i_right))
     calib_pts_orl = np.hstack((idxs,y_o_right,z_o_right))
 
-    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=height)
-    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=height)
-    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=height)
-    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=height)
+    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=0)
+    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=0)
+    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=0)
+    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=0)
 
     img_pts_oll = img_pts_oll.reshape(-1,1,2)
     img_pts_ill = img_pts_ill.reshape(-1,1,2)
@@ -258,8 +258,8 @@ def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, 
     calib_pts_ledg = np.hstack((idxs,y_l_edg,z_l_edg))
     calib_pts_redg = np.hstack((idxs,y_r_edg,z_r_edg))
     
-    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=height)
-    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=height)
+    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=0)
+    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=0)
     
     img_pts_ledg = img_pts_ledg.reshape(-1,1,2)
     img_pts_redg = img_pts_redg.reshape(-1,1,2)
