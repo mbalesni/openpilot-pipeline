@@ -6,6 +6,7 @@ from tqdm import tqdm
 import numpy as np
 import sys
 import os
+import time
 import h5py
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -92,21 +93,32 @@ def generate_ground_truth(path_to_segment, model, force=False):
 
 
 if __name__ == '__main__':
-    # data_dir = '/gpfs/space/projects/Bolt/comma_recordings'
-    data_dir = '/home/nikita/data'
+    data_dir = '/gpfs/space/projects/Bolt/comma_recordings'
+    # data_dir = '/home/nikita/data'
 
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path_to_model = os.path.join(parent_dir, 'common/models/supercombo.onnx')
 
     options = ort.SessionOptions()
-    options.intra_op_num_threads = 2
-    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    options.intra_op_num_threads = 30
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-    model = ort.InferenceSession(path_to_model, providers=["CUDAExecutionProvider"], sess_options=options)
+    # CPU turns out faster than CUDA with batch size = 1
+    model = ort.InferenceSession(path_to_model, providers=["CPUExecutionProvider"], sess_options=options)
+
+    printf('Looking for segments...')
+    start_time = time.time()
     segment_dirs = get_segment_dirs(data_dir)
 
-    printf(f'\nFound a total of {len(segment_dirs)} segments.\n')
+    # shuffle to allow multiple concurrent runs
+    np.random.shuffle(segment_dirs)
+
+    printf(f'\nFound a total of {len(segment_dirs)} segments. {time.time() - start_time:.2f}s \n')
 
     pbar = tqdm(segment_dirs, desc='Total progress:')
     for path_to_segment in pbar:
-        generate_ground_truth(path_to_segment, model, force=True)
+        start_time = time.time()
+        generate_ground_truth(path_to_segment, model, force=False)
+        printf(f'{time.time() - start_time:.2f}s - Done segment: {path_to_segment} ')
+
