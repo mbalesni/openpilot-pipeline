@@ -143,6 +143,6 @@ def generate_ground_truth( camerafile, supercombo ):
 if __name__ == '__main__':
   camerafile = sys.argv[1]
 
-  supercombo = ort.InferenceSession('supercombo.onnx')
+  supercombo = ort.InferenceSession('common/models/supercombo.onnx')
 
   generate_ground_truth( camerafile, supercombo )
