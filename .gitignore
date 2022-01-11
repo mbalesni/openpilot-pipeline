@@ -1,3 +1,4 @@
 .ipynb_checkpoints
 outs
 __pycache__
+.DS_Store

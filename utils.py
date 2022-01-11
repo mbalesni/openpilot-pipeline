@@ -199,9 +199,10 @@ def project_path(path, calibration, z_off):
 
     return pts
 
-def create_img_plot_canvas(img_rgb, calibration):
-    img_plot = np.zeros((calibration.plot_img_height, calibration.plot_img_width, 3), dtype='uint8')
-    zoom_matrix = calibration.CALIB_BB_TO_FULL
+
+def create_image_canvas(img_rgb, zoom_matrix, plot_img_height, plot_img_width):
+    '''Transform with a correct warp/zoom transformation.'''
+    img_plot = np.zeros((plot_img_height, plot_img_width, 3), dtype='uint8')
     cv2.warpAffine(img_rgb, zoom_matrix[:2], (img_plot.shape[1], img_plot.shape[0]), dst=img_plot, flags=cv2.WARP_INVERSE_MAP)
     return img_plot
 
@@ -238,10 +239,10 @@ def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, 
     calib_pts_irl = np.hstack((idxs,y_i_right,z_i_right))
     calib_pts_orl = np.hstack((idxs,y_o_right,z_o_right))
 
-    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=height)
-    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=height)
-    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=height)
-    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=height)
+    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=0)
+    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=0)
+    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=0)
+    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=0)
 
     img_pts_oll = img_pts_oll.reshape(-1,1,2)
     img_pts_ill = img_pts_ill.reshape(-1,1,2)
@@ -258,8 +259,8 @@ def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, 
     calib_pts_ledg = np.hstack((idxs,y_l_edg,z_l_edg))
     calib_pts_redg = np.hstack((idxs,y_r_edg,z_r_edg))
     
-    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=height)
-    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=height)
+    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=0)
+    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=0)
     
     img_pts_ledg = img_pts_ledg.reshape(-1,1,2)
     img_pts_redg = img_pts_redg.reshape(-1,1,2)
