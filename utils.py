@@ -315,8 +315,8 @@ def draw_path(lane_lines, road_edges, calib_path, img_plot, calibration, X_IDXS,
     img_pts_l = project_path(calib_path_l, calibration, z_off=height)
     img_pts_r = project_path(calib_path_r, calibration, z_off=height)
 
-    #lane_lines are sequentially parsed ::--> means--> std's
-    (oll, oll_prob), (ill, ill_prob), (irl, irl_prob), (orl, orl_prob) = lane_lines
+    # lane_lines are sequentially parsed ::--> means--> std's
+    (oll, ill, irl, orl), (oll_prob, ill_prob, irl_prob, orl_prob) = lane_lines
 
     calib_pts_oll = np.hstack((fixed_distances, oll)) # (33, 3)
     calib_pts_ill = np.hstack((fixed_distances, ill)) # (33, 3)
@@ -329,8 +329,8 @@ def draw_path(lane_lines, road_edges, calib_path, img_plot, calibration, X_IDXS,
     img_pts_orl = project_path(calib_pts_orl, calibration, z_off=0).reshape(-1,1,2)
 
     #road edges
-    (left_road_edge, _), (right_road_edge, _) = road_edges
-    
+    (left_road_edge, right_road_edge), _ = road_edges
+
     calib_pts_ledg = np.hstack((fixed_distances, left_road_edge))
     calib_pts_redg = np.hstack((fixed_distances, right_road_edge))
     
