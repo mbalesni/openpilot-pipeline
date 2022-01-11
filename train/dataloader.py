@@ -23,12 +23,14 @@ path_to_videos_cache = os.path.join(cache_folder, 'videos.txt')
 path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
 
-def load_transformed_video(path_to_video, plot_img_width=640, plot_img_height=480, seq_len=1190):
-    path_to_video = path_to_video
-    seq_len = seq_len
+def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=480, seq_len=1190):
+    if os.path.exists(os.path.join(path_to_segment, 'video.hevc')):
+        path_to_video = os.path.join(path_to_segment, 'video.hevc')
+    elif os.path.exists(os.path.join(path_to_segment, 'fcamera.hevc')):
+        path_to_video = os.path.join(path_to_segment, 'fcamera.hevc')
+    else:
+        raise Exception('No video file found in {}'.format(path_to_segment))
 
-    plot_img_width = plot_img_width
-    plot_img_height = plot_img_height
     zoom = FULL_FRAME_SIZE[0] / plot_img_width
     CALIB_BB_TO_FULL = np.asarray([
         [zoom, 0., 0.],
@@ -41,14 +43,22 @@ def load_transformed_video(path_to_video, plot_img_width=640, plot_img_height=48
     yuv_frames = np.zeros((seq_len + 1, FULL_FRAME_SIZE[1]*3//2, FULL_FRAME_SIZE[0]), dtype=np.uint8)
     stacked_frames = np.zeros((seq_len, 12, 128, 256), dtype=np.uint8)
 
-    _, frame2 = segment_video.read()
+    ret, frame2 = segment_video.read()
+    if not ret:
+        print('Failed to read video from {}'.format(path_to_video))
+        return None, None
+
     yuv_frame2 = bgr_to_yuv(frame2)
     yuv_frames[0] = yuv_frame2
 
     # start iteration from 1 because we already read 1 frame before
     for t_idx in range(1, seq_len + 1):
 
-        _, frame2 = segment_video.read()
+        ret, frame2 = segment_video.read()
+        if not ret:
+            print('Failed to read video from {}'.format(path_to_video))
+            return None, None
+
         yuv_frame2 = bgr_to_yuv(frame2)
         rgb_frame =  cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
 
@@ -211,10 +221,10 @@ class CommaDataset(IterableDataset):
             segment_gts.close()
             segment_video.release()
 
-    def get_segment_dirs(self, base_dir):
+    def get_segment_dirs(self, base_dir, gt_file_name='gt_hacky.h5'):
         '''Get paths to segments that have ground truths.'''
 
-        gt_files = sorted(glob.glob(base_dir + "/**/marker_and_leads_ground_truth.npz", recursive=True))
+        gt_files = sorted(glob.glob(base_dir + f'/**/{gt_file_name}', recursive=True))
         return sorted(list(set([os.path.dirname(f) for f in gt_files])))
 
     def get_paths(self, base_dir, min_segment_len=1190):
@@ -240,7 +250,7 @@ class CommaDataset(IterableDataset):
             with open(path_to_plans_cache, 'w') as gt_paths:
                 pass
 
-            gt_filename = 'plan.h5'
+            gt_filename = 'gt_hacky.h5'
             video_filenames = ['fcamera.hevc', 'video.hevc']
 
             video_paths = []
@@ -250,7 +260,7 @@ class CommaDataset(IterableDataset):
 
                 gt_file_path = os.path.join(segment_dir, gt_filename)
                 if not os.path.exists(gt_file_path):
-                    printf(f'WARNING: not found plan.h5 file in segment: {segment_dir}')
+                    printf(f'WARNING: not found {gt_filename} file in segment: {segment_dir}')
                     continue
 
                 gt_plan = h5py.File(gt_file_path, 'r')['plans']

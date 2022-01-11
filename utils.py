@@ -5,6 +5,7 @@ import numpy as np
 import math
 import os
 import cv2
+import glob
 #from tools.lib.logreader import LogReader
 
 
@@ -21,6 +22,98 @@ eon_intrinsics = np.array([
 
 def printf(*args, **kwargs):
     print(flush=True, *args, **kwargs)
+
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+
+def get_segment_dirs(base_dir, video_names=['video.hevc', 'fcamera.hevc']):
+    '''Get paths to all segments.'''
+
+    paths_to_videos = []
+    for video_name in video_names:
+        paths = sorted(glob.glob(base_dir + f'/**/{video_name}', recursive=True))
+        paths_to_videos += paths
+    return sorted(list(set([os.path.dirname(f) for f in paths_to_videos])))
+
+
+def extract_preds(outputs, best_plan_only=True):
+    # N is batch_size
+
+    plan_start_idx = 0
+    plan_end_idx = 4955
+
+    lanes_start_idx = plan_end_idx
+    lanes_end_idx = lanes_start_idx + 528
+
+    lane_lines_prob_start_idx = lanes_end_idx
+    lane_lines_prob_end_idx = lane_lines_prob_start_idx + 8
+
+    road_start_idx = lane_lines_prob_end_idx
+    road_end_idx = road_start_idx + 264
+
+    # plan
+    plan = outputs[:, plan_start_idx:plan_end_idx]  # (N, 4955)
+    plans = plan.reshape((-1, 5, 991))  # (N, 5, 991)
+    plan_probs = plans[:, :, -1]  # (N, 5)
+    plans = plans[:, :, :-1].reshape(-1, 5, 2, 33, 15)  # (N, 5, 2, 33, 15)
+    best_plan_idx = np.argmax(plan_probs, axis=1)[0]  # (N,)
+    best_plan = plans[:, best_plan_idx, ...]  # (N, 2, 33, 15)
+
+    # lane lines
+    lane_lines = outputs[:, lanes_start_idx:lanes_end_idx]  # (N, 528)
+    lane_lines_deflat = lane_lines.reshape((-1, 2, 264))  # (N, 2, 264)
+    lane_lines_means = lane_lines_deflat[:, 0, :]  # (N, 264)
+    lane_lines_means = lane_lines_means.reshape(-1, 4, 33, 2)  # (N, 4, 33, 2)
+
+    outer_left_lane = lane_lines_means[:, 0, :, :]  # (N, 33, 2)
+    inner_left_lane = lane_lines_means[:, 1, :, :]  # (N, 33, 2)
+    inner_right_lane = lane_lines_means[:, 2, :, :]  # (N, 33, 2)
+    outer_right_lane = lane_lines_means[:, 3, :, :]  # (N, 33, 2)
+
+    # lane lines probs
+    lane_lines_probs = outputs[:, lane_lines_prob_start_idx:lane_lines_prob_end_idx]  # (N, 8)
+    lane_lines_probs = lane_lines_probs.reshape((-1, 4, 2))  # (N, 4, 2)
+    lane_lines_probs = sigmoid(lane_lines_probs[:, :, 1])  # (N, 4), 0th is deprecated
+
+    outer_left_prob = lane_lines_probs[:, 0]  # (N,)
+    inner_left_prob = lane_lines_probs[:, 1]  # (N,)
+    inner_right_prob = lane_lines_probs[:, 2]  # (N,)
+    outer_right_prob = lane_lines_probs[:, 3]  # (N,)
+
+    # road edges
+    road_edges = outputs[:, road_start_idx:road_end_idx]
+    road_edges_deflat = road_edges.reshape((-1, 2, 132))  # (N, 2, 132)
+    road_edge_means = road_edges_deflat[:, 0, :].reshape(-1, 2, 33, 2)  # (N, 2, 33, 2)
+    road_edge_stds = road_edges_deflat[:, 1, :].reshape(-1, 2, 33, 2)  # (N, 2, 33, 2)
+
+    left_edge = road_edge_means[:, 0, :, :]  # (N, 33, 2)
+    right_edge = road_edge_means[:, 1, :, :]
+    left_edge_std = road_edge_stds[:, 0, :, :]  # (N, 33, 2)
+    right_edge_std = road_edge_stds[:, 1, :, :]
+
+    batch_size = best_plan.shape[0]
+
+    result_batch = []
+
+    # TODO: update visualization accordingly
+    # make the output a bit more readable
+    # each element of the output list is a tuple of predictions at respective sample_idx
+    for i in range(batch_size):
+        lanelines = [outer_left_lane[i], inner_left_lane[i], inner_right_lane[i], outer_right_lane[i]]
+        lanelines_probs = [outer_left_prob[i], inner_left_prob[i], inner_right_prob[i], outer_right_prob[i]]
+        road_edges = [left_edge[i], right_edge[i]]
+        road_edges_probs = [left_edge_std[i], right_edge_std[i]]
+
+        if best_plan_only:
+            plan = best_plan[i]
+        else:
+            plan = (plans[i], plan_probs[i])
+
+        result_batch.append(((lanelines, lanelines_probs), (road_edges, road_edges_probs), plan))
+
+    return result_batch
 
 
 def transform_img(base_img,
@@ -207,12 +300,13 @@ def create_image_canvas(img_rgb, zoom_matrix, plot_img_height, plot_img_width):
     return img_plot
 
 
-def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, lane_line_color_list, width=1, height=1.22, fill_color=(128, 0, 255), line_color=(0, 255, 0)):
+def draw_path(lane_lines, road_edges, calib_path, img_plot, calibration, X_IDXS, lane_line_color_list, width=1, height=1.22, fill_color=(128, 0, 255), line_color=(0, 255, 0)):
     
     '''Draw a path plan on an image.'''    
 
     overlay = img_plot.copy()
     alpha = 0.4
+    fixed_distances = np.array(X_IDXS)[:,np.newaxis]
     
     #paths
     calib_path_l = calib_path - np.array([0, width, 0])
@@ -221,52 +315,28 @@ def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, 
     img_pts_l = project_path(calib_path_l, calibration, z_off=height)
     img_pts_r = project_path(calib_path_r, calibration, z_off=height)
 
-    #lane_lines are sequentially parsed ::--> means--> std's
-    oll = lane_lines[0] 
-    ill = lane_lines[1]
-    irl = lane_lines[2] 
-    orl = lane_lines[3]
-        
-    idxs = np.array(X_IDXS)[:,np.newaxis]
-    
-    y_o_left , z_o_left = oll[:,::2].reshape(33,1), oll[:,1::2].reshape(33,1)
-    y_i_left , z_i_left = ill[:,::2].reshape(33,1), ill[:,1::2].reshape(33,1)
-    y_i_right , z_i_right = irl[:,::2].reshape(33,1), irl[:,1::2].reshape(33,1)
-    y_o_right , z_o_right = orl[:,::2].reshape(33,1), orl[:,1::2].reshape(33,1)
-    
-    calib_pts_oll = np.hstack((idxs,y_o_left,z_o_left))
-    calib_pts_ill = np.hstack((idxs,y_i_left,z_i_left))
-    calib_pts_irl = np.hstack((idxs,y_i_right,z_i_right))
-    calib_pts_orl = np.hstack((idxs,y_o_right,z_o_right))
+    # lane_lines are sequentially parsed ::--> means--> std's
+    (oll, ill, irl, orl), (oll_prob, ill_prob, irl_prob, orl_prob) = lane_lines
 
-    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=0)
-    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=0)
-    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=0)
-    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=0)
+    calib_pts_oll = np.hstack((fixed_distances, oll)) # (33, 3)
+    calib_pts_ill = np.hstack((fixed_distances, ill)) # (33, 3)
+    calib_pts_irl = np.hstack((fixed_distances, irl)) # (33, 3)
+    calib_pts_orl = np.hstack((fixed_distances, orl)) # (33, 3)
 
-    img_pts_oll = img_pts_oll.reshape(-1,1,2)
-    img_pts_ill = img_pts_ill.reshape(-1,1,2)
-    img_pts_irl = img_pts_irl.reshape(-1,1,2)
-    img_pts_orl = img_pts_orl.reshape(-1,1,2)
+    img_pts_oll = project_path(calib_pts_oll, calibration, z_off=0).reshape(-1,1,2)
+    img_pts_ill = project_path(calib_pts_ill, calibration, z_off=0).reshape(-1,1,2)
+    img_pts_irl = project_path(calib_pts_irl, calibration, z_off=0).reshape(-1,1,2)
+    img_pts_orl = project_path(calib_pts_orl, calibration, z_off=0).reshape(-1,1,2)
 
     #road edges
-    right_road_edg =road_edges[1] 
-    left_road_edg = road_edges[0]
+    (left_road_edge, right_road_edge), _ = road_edges
 
-    y_l_edg , z_l_edg = left_road_edg[:,::2].reshape(33,1), left_road_edg[:,1::2].reshape(33,1)
-    y_r_edg , z_r_edg = right_road_edg[:,::2].reshape(33,1), right_road_edg[:,1::2].reshape(33,1)
+    calib_pts_ledg = np.hstack((fixed_distances, left_road_edge))
+    calib_pts_redg = np.hstack((fixed_distances, right_road_edge))
     
-    calib_pts_ledg = np.hstack((idxs,y_l_edg,z_l_edg))
-    calib_pts_redg = np.hstack((idxs,y_r_edg,z_r_edg))
+    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=0).reshape(-1,1,2)
+    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=0).reshape(-1,1,2)
     
-    img_pts_ledg = project_path(calib_pts_ledg, calibration, z_off=0)
-    img_pts_redg = project_path(calib_pts_redg, calibration, z_off=0)
-    
-    img_pts_ledg = img_pts_ledg.reshape(-1,1,2)
-    img_pts_redg = img_pts_redg.reshape(-1,1,2)
-    # print("il:\n",img_pts_irl.shape)
-    # print("ir:\n",img_ptsi_rll[0:10,:,:])
-
     # plot_path
     for i in range(1, len(img_pts_l)):
         u1, v1, u2, v2 = np.append(img_pts_l[i-1], img_pts_r[i-1])
@@ -274,18 +344,20 @@ def draw_path(lane_lines,road_edges, calib_path, img_plot, calibration, X_IDXS, 
         pts = np.array([[u1, v1], [u2, v2], [u4, v4], [u3, v3]], np.int32).reshape((-1, 1, 2))
         cv2.fillPoly(overlay, [pts], fill_color)
         cv2.polylines(overlay, [pts], True, line_color)
+
+    lane_lines_with_probs = [(img_pts_oll, oll_prob), (img_pts_ill, ill_prob), (img_pts_irl, irl_prob), (img_pts_orl, orl_prob)]
     
-    #plot lanelines
-    cv2.polylines(overlay,[img_pts_oll],False,lane_line_color_list[0],thickness=2)
-    cv2.polylines(overlay,[img_pts_ill],False,lane_line_color_list[1],thickness=2)
-    cv2.polylines(overlay,[img_pts_irl],False,lane_line_color_list[2],thickness=2)
-    cv2.polylines(overlay,[img_pts_orl],False,lane_line_color_list[3],thickness=2)
-    
-    #plot road_edges
+    # plot lanelines
+    for i, (line_pts, prob) in enumerate(lane_lines_with_probs):
+        line_overlay = overlay.copy()
+        cv2.polylines(line_overlay,[line_pts],False,lane_line_color_list[i],thickness=2)
+        img_plot = cv2.addWeighted(line_overlay, prob, img_plot, 1 - prob, 0)
+
+    # plot road_edges
     cv2.polylines(overlay,[img_pts_ledg],False,(255,128,0),thickness=1)
     cv2.polylines(overlay,[img_pts_redg],False,(255,234,0),thickness=1)
 
-    #drawing the plots on original iamge
+    # drawing the plots on original iamge
     img_plot = cv2.addWeighted(overlay, alpha, img_plot, 1 - alpha, 0)
 
     return img_plot

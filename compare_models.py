@@ -269,7 +269,7 @@ def plot_model_preds(data_obj, seq_len, batch_sizes):
 if __name__ == '__main__':
 
     comma_recordings_basedir = '/home/nikita/data'
-    path_to_onnx_model = 'train/supercombo.onnx'
+    path_to_onnx_model = 'common/models/supercombo.onnx'
     outs_folder = 'outs'
 
     train_split = 0.8
