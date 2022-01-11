@@ -199,9 +199,10 @@ def project_path(path, calibration, z_off):
 
     return pts
 
-def create_img_plot_canvas(img_rgb, calibration):
-    img_plot = np.zeros((calibration.plot_img_height, calibration.plot_img_width, 3), dtype='uint8')
-    zoom_matrix = calibration.CALIB_BB_TO_FULL
+
+def create_image_canvas(img_rgb, zoom_matrix, plot_img_height, plot_img_width):
+    '''Transform with a correct warp/zoom transformation.'''
+    img_plot = np.zeros((plot_img_height, plot_img_width, 3), dtype='uint8')
     cv2.warpAffine(img_rgb, zoom_matrix[:2], (img_plot.shape[1], img_plot.shape[0]), dst=img_plot, flags=cv2.WARP_INVERSE_MAP)
     return img_plot
 
