@@ -23,12 +23,14 @@ path_to_videos_cache = os.path.join(cache_folder, 'videos.txt')
 path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
 
-def load_transformed_video(path_to_video, plot_img_width=640, plot_img_height=480, seq_len=1190):
-    path_to_video = path_to_video
-    seq_len = seq_len
+def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=480, seq_len=1190):
+    if os.path.exists(os.path.join(path_to_segment, 'video.hevc')):
+        path_to_video = os.path.join(path_to_segment, 'video.hevc')
+    elif os.path.exists(os.path.join(path_to_segment, 'fcamera.hevc')):
+        path_to_video = os.path.join(path_to_segment, 'fcamera.hevc')
+    else:
+        raise Exception('No video file found in {}'.format(path_to_segment))
 
-    plot_img_width = plot_img_width
-    plot_img_height = plot_img_height
     zoom = FULL_FRAME_SIZE[0] / plot_img_width
     CALIB_BB_TO_FULL = np.asarray([
         [zoom, 0., 0.],

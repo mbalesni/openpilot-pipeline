@@ -13,8 +13,7 @@ if __name__ == "__main__":
     printf()
     for epoch in range(5):
         time_start = time.time()
-        input_frames, rgb_frames = load_transformed_video(
-            '/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4/video.hevc')
+        input_frames, rgb_frames = load_transformed_video('/home/nikita/data/2021-09-14--09-19-21/25/')
         # NOTE: no need to use `create_img_plot_canvas` function anymore — just feed the `rgb_frames` one-by-one to the `draw_path`.
 
         printf(f'{time.time() - time_start:.2f}s – to load batch.')
