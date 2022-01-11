@@ -215,27 +215,29 @@ def mean_std(array):
     return mean, std
 
 def calcualte_path_loss(mean1, mean2, std1, std2):
-    d1 = torch.distributions.normal.Normal(mean1, std1)
-    d2 = torch.distributions.normal.Normal(mean2, std2)
+    """
+    scratch :Laplace or gaussian likelihood 
+    model distillation: gaussian or laplace KL divergence
+    """
+    d1 = torch.distributions.laplace.Laplace(mean1, std1)
+    d2 = torch.distributions.laplace.Laplace(mean2, std2)
     loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
     return loss
     
-def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size):
+def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size, mhp_loss = False):
     
-    path_dict = {} ### there are chances i might need to put this also into if loop as it is compliant with dummy and scratch
+    path_dict = {} 
     path_plans =  plan_pred
     path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
-
     path_dict["path_prob"] = []
-    path_dict["path1"] = path1[:,:-1].clone().reshape(batch_size,2,33,15)
-    path_dict["path2"] = path2[:,:-1].clone().reshape(batch_size,2,33,15)
-    path_dict["path3"] = path3[:,:-1].clone().reshape(batch_size,2,33,15)
-    path_dict["path4"] = path4[:,:-1].clone().reshape(batch_size,2,33,15)
+    path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
     path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
     path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
                     path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5,1)
     
-    #naive path_loss---> train all the paths together
     path1_gt = plan_gt[:,0,:,:,:] 
     path2_gt = plan_gt[:,1,:,:,:]
     path3_gt = plan_gt[:,2,:,:,:]
@@ -262,14 +264,33 @@ def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size):
     path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
     path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
     path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
-
+    
+    path_head_loss = [path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]
+    
     path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
     path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
     path_prob_loss =  torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
 
-    path_plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
-    
-    return path_plan_loss
+    if not mhp_loss:
+        
+        #naive path loss
+        plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
+    else:
+        
+        # winner-take-all loss
+        mask = torch.full((1,5),1e-6)
+        
+        path_head_loss = torch.tensor(path_head_loss)
+        idx = torch.argmin(path_head_loss)
+        
+        mask[:, idx] =1
+        
+        path_perhead_loss = torch.mul(path_head_loss,mask)
+        path_perhead_loss = path_perhead_loss.sum(dim=1)
+        
+        plan_loss= path_perhead_loss + path_prob_loss
+        #TODO: confirm to add and find the path_prob_loss via kldiv or crossentropy 
+    return plan_loss
 
 
 ### train loop 
