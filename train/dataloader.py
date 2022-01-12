@@ -24,6 +24,8 @@ path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
 
 def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=480, seq_len=1190):
+    
+    print(os.path.exists(path_to_segment))
     if os.path.exists(os.path.join(path_to_segment, 'video.hevc')):
         path_to_video = os.path.join(path_to_segment, 'video.hevc')
     elif os.path.exists(os.path.join(path_to_segment, 'fcamera.hevc')):
@@ -71,7 +73,7 @@ def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=
         stacked_frames[i] = np.vstack(prepared_frames[i:i+2])[None].reshape(12, 128, 256)
 
     segment_video.release()
-    return stacked_frames, rgb_frames
+    return torch.from_numpy(stacked_frames).float(), rgb_frames
 
 
 class CommaDataset(IterableDataset):

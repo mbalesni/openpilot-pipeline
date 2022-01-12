@@ -458,37 +458,49 @@ for epoch in tqdm(range(epochs)):
                    visualization
                     """
                     input_frames, rgb_frames = load_transformed_video( '/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4/video.hevc')
+
                     # print(input_frames.shape, rgb_frames.shape)
-                    
-                    #intialize video_array
-                    video_array = np.zeros(rgb_frames.shape)
 
-                    for i in range((input_frames.shape[0])):
-                        inputs =  {"input_imgs":input_frames[i].reshape(1,12,128,256).float(),
-                                    "desire": desire,
-                                    "traffic_convention": traffic_convention,
-                                    'initial_state': recurr_state                                    
-                                    }
+                    video_array = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
+                    # print(video_array.shape)
 
-                        outs = comma_model(**inputs)
+                    for itr in range(int(np.round(input_frames.shape[0]/batch_size))): ## ---for batch_size 32 skipping 6 frames for video
     
-                        preds = outs.detach().cpu().numpy()
+                        start_indx, end_indx = itr * batch_size , (itr +1) * batch_size
+        
+                        itr_input_frames = input_frames[start_indx:end_indx] 
+                        itr_rgb_frames = rgb_frames[start_indx:end_indx]
+        
+                        inputs =  {"input_imgs":itr_input_frames,
+                                        "desire": desire,
+                                        "traffic_convention": traffic_convention,
+                                        'initial_state': recurr_state
+                                        }
                         
-                        lanelines, roadedges, path = extract_preds(preds)
-                        
-                        im_rgb = rgb_frames[i]
-                        
-                    #     image = draw_path(a,c,b[0,0,:,:3],im_rgb,calibration_pred, X_IDXs,laneline_colors)
-                    #     print(image.shape,i)
-                        
-                        image = visualization(a,c,b, im_rgb)
-                        # print(image.shape,i)
-                        video_array[i,:,:,:] = image
+                        outs = comma_model(**inputs)
+                        # print(outs.shape)
+        
+                        preds = outs.detach().cpu().numpy() #(N,6472)
+        
+                        batch_vis_img = np.zeros((preds.shape[0],rgb_frames.shape[1],rgb_frames.shape[2],rgb_frames.shape[3]))
+                        # print(batch_vis_img.shape)
+                        for i in range(preds.shape[0]):
+            
+                            pred_it = preds[i][np.newaxis,:]
+                            lanelines, road_edges, best_path = extract_preds(pred_it)[0]
 
+                            im_rgb = itr_rgb_frames[i] 
+            
+                            # print(best_path[0,:,:3].shape)
+                            # print(im_rgb.shape)
+                            image = visualization(lanelines,road_edges,best_path[0,:,:3], im_rgb)
+                            # print(image.shape)
+                            batch_vis_img[i] = image
+    
+                        video_array[start_indx:end_indx,:,:,:] = batch_vis_img
+    
                     video_array = video_array.transpose(0,3,1,2)
-                    
-                    video_log_title = "val_video" + str(epoch)
-                    wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+                    # wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
 
                     val_st_pt = time.time()
                     val_loss_cpu = 0.0

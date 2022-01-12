@@ -328,7 +328,7 @@ def draw_path(lane_lines, road_edges, calib_path, img_plot, calibration, X_IDXS,
     img_pts_irl = project_path(calib_pts_irl, calibration, z_off=0).reshape(-1,1,2)
     img_pts_orl = project_path(calib_pts_orl, calibration, z_off=0).reshape(-1,1,2)
 
-    #road edges
+    # road edges
     (left_road_edge, right_road_edge), _ = road_edges
 
     calib_pts_ledg = np.hstack((fixed_distances, left_road_edge))
