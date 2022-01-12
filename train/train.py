@@ -6,13 +6,14 @@ from tqdm import tqdm
 import torch 
 import torch.nn as nn
 import torch.optim as topt
-from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator
+from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video
 from torch.utils.data import DataLoader
 from model import *
 from onnx2pytorch import ConvertModel
 import onnx
 import wandb
 from timing import *
+from utils import Calibration, draw_path
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -208,6 +209,68 @@ else:
                                                  threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                  cooldown=lrs_cd)                               
 
+
+def extract_preds(res):
+    # N is batch_size
+
+    plan_start_idx = 0
+    plan_end_idx = 4955
+
+    lanes_start_idx = plan_end_idx
+    lanes_end_idx = lanes_start_idx + 528
+
+    lane_lines_prob_start_idx = lanes_end_idx
+    lane_lines_prob_end_idx = lane_lines_prob_start_idx + 8
+
+    road_start_idx = lane_lines_prob_end_idx
+    road_end_idx = road_start_idx + 264
+    #paths
+    plan = res[:, plan_start_idx:plan_end_idx]  # (N, 4955)
+    
+    paths = np.array(np.split(plan, 5, axis=1)).reshape(-1, 5, 991)  # (N, 5, 991)
+    path_probs = paths[:, :, -1]  # (N, 5)
+    paths = paths[:, :, :-1].reshape(-1, 5, 2, 33, 15)  # (N, 5, 2, 33, 15)
+
+    best_idx = np.argmax(path_probs, axis=1)[0]  # (N,)
+    best_path = paths[:, best_idx, ...]  # (N, 2, 33, 15)
+    
+    #lanes
+    lanes = res[:, lanes_start_idx:lanes_end_idx] # (N, 528)
+    mean_outer_left = lanes[:, 0:66]
+    mean_inner_left = lanes[:, 66:132]    
+    mean_inner_right = lanes[:, 132:198]
+    mean_outer_right = lanes[:, 198:264]
+
+    # road_edges
+    lane_road = res[:, road_start_idx:road_end_idx]
+    mean_roadedg_right = lane_road[:, 0:66]
+    mean_roadedg_left = lane_road[:, 66:132]
+
+    ##TODO: parse road edges  and visualize them too.
+    lanelines = [mean_outer_left, mean_inner_left, mean_inner_right, mean_outer_right]
+    road_edges = [mean_roadedg_right,mean_roadedg_left]
+
+    return lanelines, best_path, road_edges
+
+def visualization(lanelines, roadedges, calib_path, im_rgb):
+    plot_img_height, plot_img_width = 480, 640
+
+    rpy_calib = [0, 0, 0]
+    X_IDXs = [
+        0.    ,   0.1875,   0.75  ,   1.6875,   3.    ,   4.6875,
+        6.75  ,   9.1875,  12.    ,  15.1875,  18.75  ,  22.6875,
+        27.    ,  31.6875,  36.75  ,  42.1875,  48.    ,  54.1875,
+        60.75  ,  67.6875,  75.    ,  82.6875,  90.75  ,  99.1875,
+        108.    , 117.1875, 126.75  , 136.6875, 147.    , 157.6875,
+        168.75  , 180.1875, 192.]
+
+    calibration_pred = Calibration(rpy_calib, plot_img_width=plot_img_width, plot_img_height=plot_img_height)
+    laneline_colors = [(255,0,0),(0,255,0),(255,0,255),(0,255,255)]
+    vis_image = draw_path(lanelines,roadedges,calib_path[0,0,:,:3],im_rgb,calibration_pred, X_IDXs,laneline_colors)
+    
+#     print(vis_image.shape)
+    return vis_image
+
 #Loss functions:
 def mean_std(array):
     mean = array[:,0,:,:]
@@ -388,59 +451,88 @@ for epoch in tqdm(range(epochs)):
                     run_loss =0.0
                 
         # validation loop  
-            # with torch.no_grad(): ## saving memory by not accumulating activations
-            #     if (epoch +1) %check_val_epoch ==0:
+            with torch.no_grad(): ## saving memory by not accumulating activations
+                if (epoch +1) %check_val_epoch ==0:
 
-            #         """
+                    """
+                   visualization
+                    """
+                    input_frames, rgb_frames = load_transformed_video( '/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4/video.hevc')
+                    # print(input_frames.shape, rgb_frames.shape)
                     
-            #         Somewhere here i need to call for visualization. use the existing code to be used for visualization in vis.ipynb
-                    
-            #         """
-                    
+                    #intialize video_array
+                    video_array = np.zeros(rgb_frames.shape)
 
-            #         val_st_pt = time.time()
-            #         val_loss_cpu = 0.0
+                    for i in range((input_frames.shape[0])):
+                        inputs =  {"input_imgs":input_frames[i].reshape(1,12,128,256).float(),
+                                    "desire": desire,
+                                    "traffic_convention": traffic_convention,
+                                    'initial_state': recurr_state                                    
+                                    }
 
-            #         comma_model.eval()
-
-            #         checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
-            #         torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
-                    
-            #         print(">>>>>validating<<<<<<<")
-
-            #         for val_itr, val_batch in enumerate(val_loader):
-
-            #             val_stacked_frames, val_plans, val_plans_probs, val_segment_finished, val_sequence_finished, val_bgr_frames = val_batch
-
-            #             val_input = val_stacked_frames.to(device)
-            #             val_label_path = val_plans.to(device)
-            #             val_label_path_prob = val_plans_probs.to(device)
-
-            #             val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+                        outs = comma_model(**inputs)
+    
+                        preds = outs.detach().cpu().numpy()
                         
-            #             for i in range(seq_len):
-            #                 val_inputs_to_pretained_model = {"input_imgs":val_input[:,i,:,:,:],
-            #                                         "desire": desire,
-            #                                         "traffic_convention":traffic_convention,
-            #                                         "initial_state": recurr_state}
+                        lanelines, roadedges, path = extract_preds(preds)
                         
-            #                 val_outputs = comma_model(**val_inputs_to_pretained_model) ## --> [32,6472]
-            #                 val_path_prediction = val_outputs[:,:4955].clone() ## --> [32,4955]
+                        im_rgb = rgb_frames[i]
+                        
+                    #     image = draw_path(a,c,b[0,0,:,:3],im_rgb,calibration_pred, X_IDXs,laneline_colors)
+                    #     print(image.shape,i)
+                        
+                        image = visualization(a,c,b, im_rgb)
+                        # print(image.shape,i)
+                        video_array[i,:,:,:] = image
 
-            #                 # val_labels_path_prob[:,i,:,:] -- > [32,5,1]
-            #                 # val_labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                    video_array = video_array.transpose(0,3,1,2)
+                    
+                    video_log_title = "val_video" + str(epoch)
+                    wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+
+                    val_st_pt = time.time()
+                    val_loss_cpu = 0.0
+
+                    comma_model.eval()
+
+                    checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
+                    torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
+                    
+                    print(">>>>>validating<<<<<<<")
+
+                    for val_itr, val_batch in enumerate(val_loader):
+
+                        val_stacked_frames, val_plans, val_plans_probs, val_segment_finished, val_sequence_finished, val_bgr_frames = val_batch
+
+                        val_input = val_stacked_frames.to(device)
+                        val_label_path = val_plans.to(device)
+                        val_label_path_prob = val_plans_probs.to(device)
+
+                        val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True)
+                        
+                        for i in range(seq_len):
+                            val_inputs_to_pretained_model = {"input_imgs":val_input[:,i,:,:,:],
+                                                    "desire": desire,
+                                                    "traffic_convention":traffic_convention,
+                                                    "initial_state": recurr_state}
+                        
+                            val_outputs = comma_model(**val_inputs_to_pretained_model) ## --> [32,6472]
+                            val_path_prediction = val_outputs[:,:4955].clone() ## --> [32,4955]
+
+                            # val_labels_path_prob[:,i,:,:] -- > [32,5,1]
+                            # val_labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
                 
-            #                 single_val_loss = path_plan_loss(val_path_prediction,val_label_path[:,i,:,:,:,:], val_label_path_prob[:,i,:,:], batch_size)
-            #                 val_batch_loss += single_val_loss
+                            single_val_loss = path_plan_loss(val_path_prediction,val_label_path[:,i,:,:,:,:], val_label_path_prob[:,i,:,:], batch_size)
+                            val_batch_loss += single_val_loss
                         
-            #             val_batch_loss = val_batch_loss/batch_size
-            #             val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
+                        val_batch_loss = val_batch_loss/batch_size
+                        val_loss_cpu += val_batch_loss.deatch().clone().cpu().item()
 
-            #             if (val_itr+1)%10 == 0:
-            #                 print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+                        if (val_itr+1)%10 == 0:
+                            print(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
 
-            #         print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
-            #         # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
+                    print(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
+                    # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
                         
     print(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}, time_per_epoch: {time.time() - start_point}")
     # tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups[0]['lr'], time.time() - start_point )
@@ -448,7 +540,6 @@ for epoch in tqdm(range(epochs)):
 # PATH = "./nets/model_itr/" +name + ".pth" 
 # torch.save(comma_model.state_dict(), PATH)
 # print( "Saved trained model" )
-
 
 
 """
