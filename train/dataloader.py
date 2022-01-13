@@ -261,30 +261,32 @@ class CommaDataset(IterableDataset):
             for segment_dir in tqdm(segment_dirs):
 
                 gt_file_path = os.path.join(segment_dir, gt_filename)
+
                 if not os.path.exists(gt_file_path):
                     printf(f'WARNING: not found {gt_filename} file in segment: {segment_dir}')
                     continue
+               
+                else:
+                    gt_plan = h5py.File(gt_file_path, 'r')['plans']
 
-                gt_plan = h5py.File(gt_file_path, 'r')['plans']
+                    if gt_plan.shape[0] >= min_segment_len:  # keep segments that have >= 1190 samples
 
-                if gt_plan.shape[0] >= min_segment_len:  # keep segments that have >= 1190 samples
+                        video_files = os.listdir(segment_dir)
+                        video_files = [file for file in video_files if file in video_filenames]
 
-                    video_files = os.listdir(segment_dir)
-                    video_files = [file for file in video_files if file in video_filenames]
+                        found_one_video = 0 <= len(video_files) <= 1
 
-                    found_one_video = 0 <= len(video_files) <= 1
+                        if found_one_video:
+                            with open(path_to_videos_cache, 'a') as video_paths_f:
+                                video_path = os.path.join(segment_dir, video_files[0])
+                                video_paths.append(video_path)
+                                video_paths_f.write(video_path + '\n')  # cache it
 
-                    if found_one_video:
-                        with open(path_to_videos_cache, 'a') as video_paths_f:
-                            video_path = os.path.join(segment_dir, video_files[0])
-                            video_paths.append(video_path)
-                            video_paths_f.write(video_path + '\n')  # cache it
-
-                        with open(path_to_plans_cache, 'a') as gt_paths_f:
-                            gt_paths.append(gt_file_path)
-                            gt_paths_f.write(gt_file_path + '\n')  # cache it
-                    else:
-                        printf(f'WARNING: found {len(video_files)} in segment: {segment_dir}')
+                            with open(path_to_plans_cache, 'a') as gt_paths_f:
+                                gt_paths.append(gt_file_path)
+                                gt_paths_f.write(gt_file_path + '\n')  # cache it
+                        else:
+                            printf(f'WARNING: found {len(video_files)} in segment: {segment_dir}')
 
         return video_paths, gt_paths
 
