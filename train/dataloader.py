@@ -240,8 +240,15 @@ class CommaDataset(IterableDataset):
             gt_paths = []
             with open(path_to_videos_cache, 'r') as f:
                 video_paths = f.read().splitlines()
+
+                ### for overfitting test
+                # video_paths = video_paths[0]
+
             with open(path_to_plans_cache, 'r') as f:
                 gt_paths = f.read().splitlines()
+                
+                ### for overfitting test
+                # gt_paths = gt_paths[0] #taking only one segment
         else:
             printf('Resolving paths to videos and GTs...')
             segment_dirs = self.get_segment_dirs(base_dir)
@@ -264,9 +271,10 @@ class CommaDataset(IterableDataset):
 
                 if not os.path.exists(gt_file_path):
                     printf(f'WARNING: not found {gt_filename} file in segment: {segment_dir}')
+
                     continue
                
-                else:
+                try:
                     gt_plan = h5py.File(gt_file_path, 'r')['plans']
 
                     if gt_plan.shape[0] >= min_segment_len:  # keep segments that have >= 1190 samples
@@ -287,6 +295,8 @@ class CommaDataset(IterableDataset):
                                 gt_paths_f.write(gt_file_path + '\n')  # cache it
                         else:
                             printf(f'WARNING: found {len(video_files)} in segment: {segment_dir}')
+                except :
+                    continue
 
         return video_paths, gt_paths
 
@@ -384,7 +394,7 @@ if __name__ == "__main__":
     else:
         comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    batch_size = num_workers = 30  # MUST BE batch_size == num_workers
+    batch_size = num_workers =30  # MUST BE batch_size == num_workers
     seq_len = 100
     prefetch_factor = 2
     prefetch_warmup_time = 2  # seconds wait before starting iterating
