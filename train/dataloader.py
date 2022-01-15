@@ -22,6 +22,42 @@ cache_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
 path_to_videos_cache = os.path.join(cache_folder, 'videos.txt')
 path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
 
+def preprocess_frame(frame1, plot_img_width=640, plot_img_height=480, seq_len=1190):
+    zoom = FULL_FRAME_SIZE[0] / plot_img_width
+    CALIB_BB_TO_FULL = np.asarray([
+        [zoom, 0., 0.],
+        [0., zoom, 0.],
+        [0., 0., 1.]])
+  
+    rgb_frames = np.zeros((seq_len, plot_img_height, plot_img_width, 3), dtype=np.uint8)
+    yuv_frames = np.zeros((seq_len + 1, FULL_FRAME_SIZE[1]*3//2, FULL_FRAME_SIZE[0]), dtype=np.uint8)
+    stacked_frames = np.zeros((seq_len, 12, 128, 256), dtype=np.uint8)
+
+    dim = (1164, 874)
+    frame2 = cv2.resize(frame1, dim, interpolation = cv2.INTER_AREA)
+
+    yuv_frame2 = bgr_to_yuv(frame2)
+    yuv_frames[0] = yuv_frame2
+
+    # start iteration from 1 because we already read 1 frame before
+    for t_idx in range(1, seq_len + 1):
+
+        # resize image
+        frame2 = cv2.resize(frame2, dim, interpolation = cv2.INTER_AREA)
+        
+
+        yuv_frame2 = bgr_to_yuv(frame2)
+        rgb_frame =  cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
+
+        rgb_frames[t_idx-1] = create_image_canvas(rgb_frame, CALIB_BB_TO_FULL, plot_img_height, plot_img_width)
+        yuv_frames[t_idx] = yuv_frame2
+
+    prepared_frames = transform_frames(yuv_frames)
+
+    for i in range(seq_len):
+        stacked_frames[i] = np.vstack(prepared_frames[i:i+2])[None].reshape(12, 128, 256)
+
+    return torch.from_numpy(stacked_frames).float(), rgb_frames    
 
 def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=480, seq_len=1190):
     
