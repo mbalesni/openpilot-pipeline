@@ -121,11 +121,12 @@ class CommaDataset(IterableDataset):
 
         printf("Subset # segments:", len(self.segment_indices))
 
+    # NOTE: this is a rough estimate (less or equal to the true value). Do NOT rely on this number.
     def __len__(self):
-        return len(self.segment_indices)
+        batches_per_segment = MIN_SEGMENT_LENGTH // self.seq_len
+        return len(self.segment_indices) * batches_per_segment
 
     def __iter__(self):
-
         timing = dict()
 
         # shuffle data subset after each epoch

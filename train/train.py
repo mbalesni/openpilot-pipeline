@@ -413,7 +413,8 @@ if __name__ == "__main__":
                     optimizer.step()
                     
                     if (tr_it+1)%10 == 0:
-                        printf(f'{epoch+1}/{epochs}, step [{tr_it+1}/{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
+                        printf(f'{epoch+1}/{epochs}, step [{tr_it+1} of ~{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
+                        # TODO: for @nikebless, verify that the running loss is computed correctly
                         if (tr_it+1) %100 == 0:
                             # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
                             scheduler.step(run_loss/100)
@@ -514,13 +515,14 @@ if __name__ == "__main__":
                                 val_loss_cpu += val_batch_loss.detach().clone().cpu().item()
 
                                 if (val_itr+1)%10 == 0:
-                                    printf(f'Epoch:{epoch+1} ,step [{val_itr+1}/{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+                                    printf(f'Epoch:{epoch+1} ,step [{val_itr+1} of ~{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
 
-                            printf(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(len(val_loader)):.4f}")
+                            printf(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(val_itr+1):.4f}")
+                            # FIXME: shouldn't the val_loss_cpu on next line be divided by the number of iterations?
                             # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
                                 
-            printf(f"Epoch: {epoch+1}, Train Loss: {tr_loss/len(train_loader)}, time_per_epoch: {time.time() - start_point}")
-            # tr_logger.plotTr(tr_loss/len(train_loader), optimizer.param_groups[0]['lr'], time.time() - start_point )
+            printf(f"Epoch: {epoch+1}, Train Loss: {tr_loss/(tr_itr+1)}, time_per_epoch: {time.time() - start_point}")
+            # tr_logger.plotTr(tr_loss/(tr_itr+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
     PATH = "./nets/model_itr/" +name + ".pth" 
     torch.save(comma_model.state_dict(), PATH)
