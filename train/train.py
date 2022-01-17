@@ -17,126 +17,23 @@ from utils import Calibration, draw_path, printf, extract_preds
 
 torch.autograd.set_detect_anomaly(True)
 
-if __name__ == "__main__":
-
-    cuda = torch.cuda.is_available()
-    if cuda:
-        import torch.backends.cudnn as cudnn
-        cudnn.benchmark = True
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-    print("=> using '{}' for computation.".format(device))
-
-    #for reproducibility 
-    seed = np.random.randint(2**16)
-    torch.manual_seed(seed)
-    print("=>seed={}".format(seed))
-
-    print("=>intializing CLI args")
-    # CLI parser 
-    parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
-    parser.add_argument("--datatype", type=str, default = "", choices=["dummy", "gen_gt"], help= "directory in which the dummy data or generated gt lies" )
-    parser.add_argument("--phase", type =str, default="train", choices = ["train", "test"])
-    parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
-    parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["scratch", "onnx2torch"], help = "choose type of model for train")
-    args = parser.parse_args()
-
-    class Logger:
-        def __init__( self, prefix ):
-            self.cur_ep = 0
-            self.prefix = prefix
-            
-        def plotTr( self, loss, lr, time, epoch=-1 ):
-            if epoch == -1:
-                self.cur_ep += 1
-            else: self.cur_ep = epoch
-            wandb.log( {"{}_Loss".format( self.prefix ): loss,
-                        "{}_Time".format( self.prefix ): time,
-                        "{}_lr".format( self.prefix ): lr},
-                        step=self.cur_ep )
+#logger class for Wandb
+class Logger:
+    def __init__( self, prefix ):
+        self.cur_ep = 0
+        self.prefix = prefix
         
+    def plotTr( self, loss, lr, time, epoch=-1 ):
+        if epoch == -1:
+            self.cur_ep += 1
+        else: self.cur_ep = epoch
+        wandb.log( {"{}_Loss".format( self.prefix ): loss,
+                    "{}_Time".format( self.prefix ): time,
+                    "{}_lr".format( self.prefix ): lr},
+                    step=self.cur_ep )
 
-    ## intializing the object of the logger class 
-    printf("=>intialzing wandb Logger class")
-
-    tr_logger = Logger("train")
-    val_logger = Logger("validation")
-
-    printf("=>intializing hyperparams")
-    #Hyperparams
-    date_it  = "16Jan_1_seg"
-    name = "onnx_gen_gt_comma_pipeline_" + date_it
-    comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
-    path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
-    onnx_path = '../common/models/supercombo.onnx'
-    n_workers = 10
-    lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
-    diff_lr = False
-    recurr_warmup = True
-    l2_lambda = (1e-4,1e-4,1e-4) 
-    lrs_factor = 0.75
-    lrs_patience = 50
-    lrs_cd = 50
-    lrs_thresh = 1e-4
-    lrs_min = 1e-6
-
-    epochs = 3
-    check_val_epoch =2
-    batch_size = num_workers = args.batch_size # MUST BE batch_size == num_workers
-    assert batch_size == num_workers, 'Batch size must be equal to number of workers'
-    split_per = 0.8
-    single_frame_batches = False
-    prefetch_factor = 1
-    seq_len = 100
-    prefetch_warmup_time = 2  # seconds wait before starting iterating
-
-    #wandb init
-    run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
-
-    ### Load data and split in test and train
-    printf("=>Loading data")
-    printf("=>Preparing the dataloader")
-
-    if "onnx" in name:
-        
-        #train loader
-        train_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len,
-                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
-        train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
-                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
-        train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
-        train_loader = BackgroundGenerator(train_loader)
-
-        #val_lodaer 
-        val_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len, validation=True,
-                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
-        val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
-                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
-        val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
-        val_loader = BackgroundGenerator(val_loader)
-        
-    ##Load model 
-    """
-    Both the model from scratch and the onnx-pytorch model can be used 
-
-    """
-    #params for scratch model
-    inputs_dim_outputheads = {"path": 256, "ll_pred": 32, "llprob": 16, "road_edges": 16,
-                            "lead_car": 64, "leadprob": 16, "desire_state": 32, "meta": [64, 32], "pose": 32}
-    output_dim_outputheads = {"path": 4955, "ll_pred": 132, "llprob": 8, "road_edges": 132,
-                            "lead_car": 102, "leadprob": 3, "desire_state": 8, "meta": [48, 32], "pose": 12}
-    filters_list = [16, 24, 48, 88, 120, 208, 352]
-    expansion = 6
-    param_scratch_model = [filters_list, expansion, inputs_dim_outputheads,
-                        output_dim_outputheads ]
-    ## only this part of the netwrok is currently trained.
-    pathplan_layer_names  = ["Gemm_959", "Gemm_981","Gemm_983","Gemm_1036"]
-
-    printf("=>Loading the model")
-    printf("=>model used:",args.modeltype)
-
-    def load_model(params_scratch, pathplan, batch_size):
+#loading model
+def load_model(params_scratch, pathplan, batch_size):
 
         if args.modeltype == 'scratch':
             model = CombinedModel(params_scratch[0], params_scratch[1],
@@ -169,10 +66,230 @@ if __name__ == "__main__":
                     layer.bias.data.fill_(0.01)     
         return model 
 
+#visualizing the model predictions 
+def visualization(lanelines, roadedges, calib_path, im_rgb):
+    plot_img_height, plot_img_width = 480, 640
+
+    rpy_calib = [0, 0, 0]
+    X_IDXs = [
+        0.    ,   0.1875,   0.75  ,   1.6875,   3.    ,   4.6875,
+        6.75  ,   9.1875,  12.    ,  15.1875,  18.75  ,  22.6875,
+        27.    ,  31.6875,  36.75  ,  42.1875,  48.    ,  54.1875,
+        60.75  ,  67.6875,  75.    ,  82.6875,  90.75  ,  99.1875,
+        108.    , 117.1875, 126.75  , 136.6875, 147.    , 157.6875,
+        168.75  , 180.1875, 192.]
+
+    calibration_pred = Calibration(rpy_calib, plot_img_width=plot_img_width, plot_img_height=plot_img_height)
+    laneline_colors = [(255,0,0),(0,255,0),(255,0,255),(0,255,255)]
+    vis_image = draw_path(lanelines,roadedges,calib_path[0,:,:3],im_rgb,calibration_pred, X_IDXs,laneline_colors)
+    
+#     print(vis_image.shape)
+    return vis_image
+
+#Loss functions:
+def mean_std(array):
+    mean = array[:,0,:,:]
+    mean = mean
+    std = array[:,1,:,:]
+    std = torch.exp(std)
+    return mean, std
+
+def calcualte_path_loss(mean1, mean2, std1, std2):
+    """
+    scratch :Laplace or gaussian likelihood 
+    model distillation: gaussian or laplace KL divergence
+    """
+    d1 = torch.distributions.laplace.Laplace(mean1, std1)
+    d2 = torch.distributions.laplace.Laplace(mean2, std2)
+    loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
+    return loss
+    
+def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size, mhp_loss = False):
+    
+    path_dict = {} 
+    path_plans =  plan_pred
+    path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
+    path_dict["path_prob"] = []
+    path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
+    path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
+    path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
+                    path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5)
+    
+    path1_gt = plan_gt[:,0,:,:,:] 
+    path2_gt = plan_gt[:,1,:,:,:]
+    path3_gt = plan_gt[:,2,:,:,:]
+    path4_gt = plan_gt[:,3,:,:,:]
+    path5_gt = plan_gt[:,4,:,:,:]
+
+    mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
+    mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
+
+    mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
+    mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
+
+    mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
+    mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
+
+    mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
+    mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
+
+    mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
+    mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
+
+    path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
+    path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
+    path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
+    path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
+    path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
+    
+    path_head_loss = [path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]
+    
+    path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
+    path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
+    path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
+
+    if not mhp_loss:
+        
+        #naive path loss
+        plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
+    else:
+        
+        # winner-take-all loss
+        mask = torch.full((1,5),1e-6)
+        
+        path_head_loss = torch.tensor(path_head_loss)
+        idx = torch.argmin(path_head_loss)
+        
+        mask[:, idx] =1
+        
+        path_perhead_loss = torch.mul(path_head_loss,mask)
+        path_perhead_loss = path_perhead_loss.sum(dim=1)
+        
+        plan_loss= path_perhead_loss + path_prob_loss
+        #TODO: confirm to add and find the path_prob_loss via kldiv or crossentropy 
+    return plan_loss
+
+if __name__ == "__main__":
+
+    cuda = torch.cuda.is_available()
+    if cuda:
+        import torch.backends.cudnn as cudnn
+        cudnn.benchmark = True
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print("=> using '{}' for computation.".format(device))
+
+    #for reproducibility 
+    seed = np.random.randint(2**16)
+    torch.manual_seed(seed)
+    print("=>seed={}".format(seed))
+
+    print("=>intializing CLI args")
+    # CLI parser 
+    parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
+    parser.add_argument("--datatype", type=str, default = "", choices=["dummy", "gen_gt"], help= "directory in which the dummy data or generated gt lies" )
+    parser.add_argument("--phase", type =str, default="train", choices = ["train", "test"])
+    parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
+    parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["scratch", "onnx2torch"], help = "choose type of model for train")
+    args = parser.parse_args()
+
+        
+    ## intializing the object of the logger class 
+    printf("=>intialzing wandb Logger class")
+
+    tr_logger = Logger("train")
+    val_logger = Logger("validation")
+
+    printf("=>intializing hyperparams")
+    #Hyperparams
+    date_it  = "16Jan_1_seg"
+    name = "onnx_gen_gt_comma_pipeline_" + date_it
+    comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
+    path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
+    onnx_path = '../common/models/supercombo.onnx'
+    n_workers = 10
+    lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
+    diff_lr = False
+    recurr_warmup = True
+    l2_lambda = (1e-4,1e-4,1e-4) 
+    lrs_factor = 0.75
+    lrs_patience = 50
+    lrs_cd = 50
+    lrs_thresh = 1e-4
+    lrs_min = 1e-6
+
+    epochs = 10
+    check_val_epoch =2
+    batch_size = num_workers = args.batch_size # MUST BE batch_size == num_workers
+    assert batch_size == num_workers, 'Batch size must be equal to number of workers'
+    split_per = 0.8
+    single_frame_batches = False
+    prefetch_factor = 1
+    seq_len = 100
+    prefetch_warmup_time = 2  # seconds wait before starting iterating
+
+    #wandb init
+    # run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
+
+    ### Load data and split in test and train
+    printf("=>Loading data")
+    printf("=>Preparing the dataloader")
+
+    if "onnx" in name:
+        
+        #train loader
+        train_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len,
+                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
+        train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
+                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+        train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
+        train_loader_len = len(train_loader)
+        
+        print(train_loader_len)
+
+        train_loader = BackgroundGenerator(train_loader)
+
+        #val_lodaer 
+        val_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len, validation=True,
+                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
+        val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
+                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+        val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
+        val_loader_len = len(val_loader)
+        
+        print(val_loader_len)
+
+        val_loader = BackgroundGenerator(val_loader)
+        
+    ##Load model 
+    """
+    Both the model from scratch and the onnx-pytorch model can be used 
+
+    """
+    #params for scratch model
+    inputs_dim_outputheads = {"path": 256, "ll_pred": 32, "llprob": 16, "road_edges": 16,
+                            "lead_car": 64, "leadprob": 16, "desire_state": 32, "meta": [64, 32], "pose": 32}
+    output_dim_outputheads = {"path": 4955, "ll_pred": 132, "llprob": 8, "road_edges": 132,
+                            "lead_car": 102, "leadprob": 3, "desire_state": 8, "meta": [48, 32], "pose": 12}
+    filters_list = [16, 24, 48, 88, 120, 208, 352]
+    expansion = 6
+    param_scratch_model = [filters_list, expansion, inputs_dim_outputheads,
+                        output_dim_outputheads ]
+    ## only this part of the netwrok is currently trained.
+    pathplan_layer_names  = ["Gemm_959", "Gemm_981","Gemm_983","Gemm_1036"]
+
+    printf("=>Loading the model")
+    printf("=>model used:",args.modeltype)
+
+
     comma_model = load_model(param_scratch_model, pathplan_layer_names,batch_size)
     comma_model = comma_model.to(device)
 
-    wandb.watch(comma_model) # Log the network weight histograms
+    # wandb.watch(comma_model) # Log the network weight histograms
 
     #allowing grad only for path_plan
     for name, param in comma_model.named_parameters():
@@ -213,111 +330,10 @@ if __name__ == "__main__":
                                                     cooldown=lrs_cd)                               
 
 
-    def visualization(lanelines, roadedges, calib_path, im_rgb):
-        plot_img_height, plot_img_width = 480, 640
-
-        rpy_calib = [0, 0, 0]
-        X_IDXs = [
-            0.    ,   0.1875,   0.75  ,   1.6875,   3.    ,   4.6875,
-            6.75  ,   9.1875,  12.    ,  15.1875,  18.75  ,  22.6875,
-            27.    ,  31.6875,  36.75  ,  42.1875,  48.    ,  54.1875,
-            60.75  ,  67.6875,  75.    ,  82.6875,  90.75  ,  99.1875,
-            108.    , 117.1875, 126.75  , 136.6875, 147.    , 157.6875,
-            168.75  , 180.1875, 192.]
-
-        calibration_pred = Calibration(rpy_calib, plot_img_width=plot_img_width, plot_img_height=plot_img_height)
-        laneline_colors = [(255,0,0),(0,255,0),(255,0,255),(0,255,255)]
-        vis_image = draw_path(lanelines,roadedges,calib_path[0,:,:3],im_rgb,calibration_pred, X_IDXs,laneline_colors)
-        
-    #     print(vis_image.shape)
-        return vis_image
-
-    #Loss functions:
-    def mean_std(array):
-        mean = array[:,0,:,:]
-        std = array[:,1,:,:]
-        std = torch.exp(std)
-        return mean, std
-
-    def calcualte_path_loss(mean1, mean2, std1, std2):
-        """
-        scratch :Laplace or gaussian likelihood 
-        model distillation: gaussian or laplace KL divergence
-        """
-        d1 = torch.distributions.laplace.Laplace(mean1, std1)
-        d2 = torch.distributions.laplace.Laplace(mean2, std2)
-        loss = torch.distributions.kl.kl_divergence(d1, d2).sum(dim =2).sum(dim =1).mean(dim =0)
-        return loss
-        
-    def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size, mhp_loss = False):
-        
-        path_dict = {} 
-        path_plans =  plan_pred
-        path1, path2, path3, path4, path5 =torch.split(path_plans,991,dim=1)
-        path_dict["path_prob"] = []
-        path_dict["path1"] = path1[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path2"] = path2[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path3"] = path3[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path4"] = path4[:,:-1].reshape(batch_size,2,33,15)
-        path_dict["path5"] = path5[:,:-1].reshape(batch_size,2,33,15)
-        path_pred_prob = torch.cat((path1[:,-1].reshape(batch_size,1), path2[:,-1].reshape(batch_size,1),path3[:,-1].reshape(batch_size,1),
-                        path4[:,-1].reshape(batch_size,1),path5[:,-1].reshape(batch_size,1)),dim =1).reshape(batch_size,5)
-        
-        path1_gt = plan_gt[:,0,:,:,:] 
-        path2_gt = plan_gt[:,1,:,:,:]
-        path3_gt = plan_gt[:,2,:,:,:]
-        path4_gt = plan_gt[:,3,:,:,:]
-        path5_gt = plan_gt[:,4,:,:,:]
-
-        mean_pred_path1, std_pred_path1 = mean_std(path_dict["path1"])
-        mean_gt_path1 , std_gt_path1 =  mean_std(path1_gt)
-
-        mean_pred_path2, std_pred_path2 = mean_std(path_dict["path2"])
-        mean_gt_path2 , std_gt_path2 =  mean_std(path2_gt)
-
-        mean_pred_path3, std_pred_path3 = mean_std(path_dict["path3"])
-        mean_gt_path3 , std_gt_path3 =  mean_std(path3_gt)
-
-        mean_pred_path4, std_pred_path4 = mean_std(path_dict["path4"])
-        mean_gt_path4 , std_gt_path4 =  mean_std(path4_gt)
-
-        mean_pred_path5, std_pred_path5 = mean_std(path_dict["path5"])
-        mean_gt_path5 , std_gt_path5 =  mean_std(path5_gt)
-
-        path1_loss = calcualte_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
-        path2_loss = calcualte_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
-        path3_loss = calcualte_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
-        path4_loss = calcualte_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
-        path5_loss = calcualte_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
-        
-        path_head_loss = [path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]
-        
-        path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
-        path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
-        path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
-
-        if not mhp_loss:
-            
-            #naive path loss
-            plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
-        else:
-            
-            # winner-take-all loss
-            mask = torch.full((1,5),1e-6)
-            
-            path_head_loss = torch.tensor(path_head_loss)
-            idx = torch.argmin(path_head_loss)
-            
-            mask[:, idx] =1
-            
-            path_perhead_loss = torch.mul(path_head_loss,mask)
-            path_perhead_loss = path_perhead_loss.sum(dim=1)
-            
-            plan_loss= path_perhead_loss + path_prob_loss
-            #TODO: confirm to add and find the path_prob_loss via kldiv or crossentropy 
-        return plan_loss
 
     printf("=====> all the params are successfully loaded")
+    
+    # def train(run, batch_size):
     
     ### train loop 
     # initializing recurrent state by zeros
@@ -335,194 +351,194 @@ if __name__ == "__main__":
 
     printf("just before the wandb run")
 
-    with run:
+    # with run:
 
-        wandb.config.lr = lr
-        wandb.config.l2 = l2_lambda
-        wandb.config.lrs = str(scheduler)
-        wandb.config.seed = seed 
+    #     wandb.config.lr = lr
+    #     wandb.config.l2 = l2_lambda
+    #     wandb.config.lrs = str(scheduler)
+    #     wandb.config.seed = seed 
 
-        recurr_tmp = torch.zeros(batch_size,512,dtype = torch.float32)
-        
-        for epoch in tqdm(range(epochs)):
-            
-            start_point = time.time()
-            tr_loss = 0.0
-            run_loss = 0.0
-
-            comma_model.train()
-        
-            recurr_tmp = torch.zeros(batch_size,512,dtype = torch.float32)
-
-            for tr_it , batch in enumerate(train_loader):        
-                if args.datatype == "gen_gt" and args.modeltype == "onnx2torch":
-                    
-                    recurr_state = recurrent_state.clone().requires_grad_(True)
-
-                    stacked_frames, plans, plans_probs, segment_finished, sequence_finished= batch
-            
-                    input = stacked_frames.float().to(device) # -- (batch_size, seq_len, 12, 128,256)
-                    labels_path = plans.to(device) # -- (batch_size,seq_len,5,2,33,15)
-                    labels_path_prob = plans_probs.to(device) # -- (batch_size,seq_len,5,1)
-                
-                    optimizer.zero_grad()
-                    batch_loss = []
-                    
-                    for i in range(seq_len):
-
-                        inputs_to_pretained_model = {"input_imgs":input[:,i,:,:,:],
-                                                    "desire": desire,
-                                                    "traffic_convention":traffic_convention,
-                                                    'initial_state': recurr_state.clone()
-                        }
-        
-                        outputs = comma_model(**inputs_to_pretained_model) # -- > [32,6472]  
+    recurr_tmp = torch.zeros(batch_size,512,dtype = torch.float32)
     
-                        plan_predictions = outputs[:,:4955].clone() # -- > [32,4955]
-                        
-                        recurr = outputs[:,5960:].clone() #-- > [32,512] important to refeed state of GRU
-                        
-                        #labels_path_prob[:,i,:,:] -- > [32,5,1]
-                        #labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
-                        
-                        single_batch_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:], batch_size)
-                        
-                        # printf("testing single batch Loss:",single_batch_loss.item())
-                        
-                        if i == seq_len -1:
-                            pass
-                        else:
-                            recurr_state = recurr.clone()
+    for epoch in tqdm(range(epochs)):
+        
+        start_point = time.time()
+        tr_loss = 0.0
+        run_loss = 0.0
 
-                        batch_loss.append(single_batch_loss)
+        comma_model.train()
+    
+        recurr_tmp = torch.zeros(batch_size,512,dtype = torch.float32)
 
-                    complete_batch_loss = sum(batch_loss)/seq_len # mean of losses over batches of sequences
+        for tr_it , batch in enumerate(train_loader):        
+            if args.datatype == "gen_gt" and args.modeltype == "onnx2torch":
+                
+                recurr_state = recurrent_state.clone().requires_grad_(True)
 
-                    # recurrent warmup
-                    if recurr_warmup and epoch == 0 and tr_it<2:
+                stacked_frames, plans, plans_probs, segment_finished, sequence_finished= batch
+        
+                input = stacked_frames.float().to(device) # -- (batch_size, seq_len, 12, 128,256)
+                labels_path = plans.to(device) # -- (batch_size,seq_len,5,2,33,15)
+                labels_path_prob = plans_probs.to(device) # -- (batch_size,seq_len,5,1)
+            
+                optimizer.zero_grad()
+                batch_loss = []
+                
+                for i in range(seq_len):
+
+                    inputs_to_pretained_model = {"input_imgs":input[:,i,:,:,:],
+                                                "desire": desire,
+                                                "traffic_convention":traffic_convention,
+                                                'initial_state': recurr_state.clone()
+                    }
+    
+                    outputs = comma_model(**inputs_to_pretained_model) # -- > [32,6472]  
+
+                    plan_predictions = outputs[:,:4955].clone() # -- > [32,4955]
+                    
+                    recurr = outputs[:,5960:].clone() #-- > [32,512] important to refeed state of GRU
+                    
+                    #labels_path_prob[:,i,:,:] -- > [32,5,1]
+                    #labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                    
+                    single_batch_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:], batch_size)
+                    
+                    # printf("testing single batch Loss:",single_batch_loss.item())
+                    
+                    if i == seq_len -1:
                         pass
                     else:
-                        complete_batch_loss.backward(retain_graph = True)
+                        recurr_state = recurr.clone()
 
-                    loss_cpu = complete_batch_loss.detach().clone().item() ## loss for one iteration
+                    batch_loss.append(single_batch_loss)
+
+                complete_batch_loss = sum(batch_loss)/seq_len # mean of losses over batches of sequences
+
+                # recurrent warmup
+                if recurr_warmup and epoch == 0 and tr_it ==0:
+                    pass
+                else:
+                    complete_batch_loss.backward(retain_graph = True)
+
+                loss_cpu = complete_batch_loss.detach().clone().item() ## loss for one iteration
+                
+                recurr_state = recurr
+
+                tr_loss += loss_cpu
+                run_loss += loss_cpu
+                optimizer.step()
+                
+                if (tr_it+1)%10 == 0:
+                    printf(f'{epoch+1}/{epochs}, step [{tr_it+1} of ~{train_loader_len}], loss: {tr_loss/(tr_it+1):.4f}')
+                    # TODO: for @nikebless, verify that the running loss is computed correctly
+                    if (tr_it+1) %100 == 0:
+                        # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
+                        scheduler.step(run_loss/100)
+                        run_loss =0.0
                     
-                    recurr_state = recurr
+            # validation loop  
+                with torch.no_grad(): ## saving memory by not accumulating activations   
+                    if (epoch +1) %check_val_epoch ==0:
+                        """
+                    visualization
+                        """
+                        printf("===> visualizing the predictions")
+                        input_frames, rgb_frames = load_transformed_video( '/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4')
 
-                    tr_loss += loss_cpu
-                    run_loss += loss_cpu
-                    optimizer.step()
-                    
-                    if (tr_it+1)%10 == 0:
-                        printf(f'{epoch+1}/{epochs}, step [{tr_it+1} of ~{len(train_loader)}], loss: {tr_loss/(tr_it+1):.4f}')
-                        # TODO: for @nikebless, verify that the running loss is computed correctly
-                        if (tr_it+1) %100 == 0:
-                            # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
-                            scheduler.step(run_loss/100)
-                            run_loss =0.0
-                        
-                # validation loop  
-                    with torch.no_grad(): ## saving memory by not accumulating activations   
-                        if (epoch +1) %check_val_epoch ==0:
-                            """
-                        visualization
-                            """
-                            printf("===> visualizing the predictions")
-                            input_frames, rgb_frames = load_transformed_video( '/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4')
+                        # print(input_frames.shape, rgb_frames.shape)
 
-                            # print(input_frames.shape, rgb_frames.shape)
+                        video_array = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
+                        # print(video_array.shape)
 
-                            video_array = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
-                            # print(video_array.shape)
-
-                            for itr in range(int(np.round(input_frames.shape[0]/batch_size))): ## ---eg. for batch_size 32 skipping 6 frames for video
+                        for itr in range(int(np.round(input_frames.shape[0]/batch_size))): ## ---eg. for batch_size 32 skipping 6 frames for video
+        
+                            start_indx, end_indx = itr * batch_size , (itr +1) * batch_size
             
-                                start_indx, end_indx = itr * batch_size , (itr +1) * batch_size
-                
-                                itr_input_frames = input_frames[start_indx:end_indx] 
-                                itr_rgb_frames = rgb_frames[start_indx:end_indx]
-                
-                                inputs =  {"input_imgs":itr_input_frames.to(device),
-                                                "desire": desire,
-                                                "traffic_convention": traffic_convention,
-                                                'initial_state': recurr_state
-                                                }
-                                
-                                outs = comma_model(**inputs)
-                                # print(outs.shape)
-                
-                                preds = outs.detach().cpu().numpy() #(N,6472)
-                
-                                batch_vis_img = np.zeros((preds.shape[0],rgb_frames.shape[1],rgb_frames.shape[2],rgb_frames.shape[3]))
-                                # print(batch_vis_img.shape)
-                                for i in range(preds.shape[0]):
-                    
-                                    pred_it = preds[i][np.newaxis,:]
-                                    lanelines, road_edges, best_path = extract_preds(pred_it)[0]
-
-                                    im_rgb = itr_rgb_frames[i] 
-                    
-                                    # print(best_path[0,:,:3].shape)
-                                    # print(im_rgb.shape)
-                                    
-                                    image = visualization(lanelines,road_edges,best_path, im_rgb)
-                                    # print(image.shape)
-                                    batch_vis_img[i] = image
+                            itr_input_frames = input_frames[start_indx:end_indx] 
+                            itr_rgb_frames = rgb_frames[start_indx:end_indx]
             
-                                video_array[start_indx:end_indx,:,:,:] = batch_vis_img
-            
-                            video_array = video_array.transpose(0,3,1,2)
-
-                            video_log_title = "val_video" + str(epoch)
-                            # wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
-
-                            val_st_pt = time.time()
-                            val_loss_cpu = 0.0
-
-                            comma_model.eval()
-
-                            checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
-                            torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
+                            inputs =  {"input_imgs":itr_input_frames.to(device),
+                                            "desire": desire,
+                                            "traffic_convention": traffic_convention,
+                                            'initial_state': recurr_state
+                                            }
                             
-                            printf(">>>>>validating<<<<<<<")
+                            outs = comma_model(**inputs)
+                            # print(outs.shape)
+            
+                            preds = outs.detach().cpu().numpy() #(N,6472)
+            
+                            batch_vis_img = np.zeros((preds.shape[0],rgb_frames.shape[1],rgb_frames.shape[2],rgb_frames.shape[3]))
+                            # print(batch_vis_img.shape)
+                            for i in range(preds.shape[0]):
+                
+                                pred_it = preds[i][np.newaxis,:]
+                                lanelines, road_edges, best_path = extract_preds(pred_it)[0]
 
-                            for val_itr, val_batch in enumerate(val_loader):
-
-                                val_stacked_frames, val_plans, val_plans_probs, val_segment_finished, val_sequence_finished = val_batch
-
-                                val_input = val_stacked_frames.float().to(device)
-                                val_label_path = val_plans.to(device)
-                                val_label_path_prob = val_plans_probs.to(device)
-
-                                val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True).to(device)
+                                im_rgb = itr_rgb_frames[i] 
+                
+                                # print(best_path[0,:,:3].shape)
+                                # print(im_rgb.shape)
                                 
-                                for i in range(seq_len):
-                                    val_inputs_to_pretained_model = {"input_imgs":val_input[:,i,:,:,:],
-                                                            "desire": desire,
-                                                            "traffic_convention":traffic_convention,
-                                                            "initial_state": recurr_state}
-                                
-                                    val_outputs = comma_model(**val_inputs_to_pretained_model) ## --> [32,6472]
-                                    val_path_prediction = val_outputs[:,:4955].clone() ## --> [32,4955]
+                                image = visualization(lanelines,road_edges,best_path, im_rgb)
+                                # print(image.shape)
+                                batch_vis_img[i] = image
+        
+                            video_array[start_indx:end_indx,:,:,:] = batch_vis_img
+        
+                        video_array = video_array.transpose(0,3,1,2)
 
-                                    # val_labels_path_prob[:,i,:,:] -- > [32,5,1]
-                                    # val_labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                        video_log_title = "val_video" + str(epoch)
+                        # wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+
+                        val_st_pt = time.time()
+                        val_loss_cpu = 0.0
+
+                        comma_model.eval()
+
+                        checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
+                        torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
                         
-                                    single_val_loss = path_plan_loss(val_path_prediction,val_label_path[:,i,:,:,:,:], val_label_path_prob[:,i,:], batch_size)
-                                    
-                                    val_batch_loss += single_val_loss
-                                
-                                val_batch_loss = val_batch_loss/batch_size
-                                val_loss_cpu += val_batch_loss.detach().clone().cpu().item()
+                        printf(">>>>>validating<<<<<<<")
 
-                                if (val_itr+1)%10 == 0:
-                                    printf(f'Epoch:{epoch+1} ,step [{val_itr+1} of ~{len(val_loader)}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+                        for val_itr, val_batch in enumerate(val_loader):
 
-                            printf(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(val_itr+1):.4f}")
-                            # FIXME: shouldn't the val_loss_cpu on next line be divided by the number of iterations?
-                            # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
+                            val_stacked_frames, val_plans, val_plans_probs, val_segment_finished, val_sequence_finished = val_batch
+
+                            val_input = val_stacked_frames.float().to(device)
+                            val_label_path = val_plans.to(device)
+                            val_label_path_prob = val_plans_probs.to(device)
+
+                            val_batch_loss = torch.zeros(1,dtype = torch.float32, requires_grad = True).to(device)
+                            
+                            for i in range(seq_len):
+                                val_inputs_to_pretained_model = {"input_imgs":val_input[:,i,:,:,:],
+                                                        "desire": desire,
+                                                        "traffic_convention":traffic_convention,
+                                                        "initial_state": recurr_state}
+                            
+                                val_outputs = comma_model(**val_inputs_to_pretained_model) ## --> [32,6472]
+                                val_path_prediction = val_outputs[:,:4955].clone() ## --> [32,4955]
+
+                                # val_labels_path_prob[:,i,:,:] -- > [32,5,1]
+                                # val_labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
+                    
+                                single_val_loss = path_plan_loss(val_path_prediction,val_label_path[:,i,:,:,:,:], val_label_path_prob[:,i,:], batch_size)
                                 
-            printf(f"Epoch: {epoch+1}, Train Loss: {tr_loss/(tr_itr+1)}, time_per_epoch: {time.time() - start_point}")
-            # tr_logger.plotTr(tr_loss/(tr_itr+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
+                                val_batch_loss += single_val_loss
+                            
+                            val_batch_loss = val_batch_loss/batch_size
+                            val_loss_cpu += val_batch_loss.detach().clone().cpu().item()
+
+                            if (val_itr+1)%10 == 0:
+                                printf(f'Epoch:{epoch+1} ,step [{val_itr+1} of ~{val_loader_len}], loss: {val_loss_cpu/(val_itr+1):.4f}')
+
+                        printf(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(val_itr+1):.4f}")
+                        # FIXME: shouldn't the val_loss_cpu on next line be divided by the number of iterations?
+                        # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
+                            
+        printf(f"Epoch: {epoch+1}, Train Loss: {tr_loss/(tr_it+1)}, time_per_epoch: {time.time() - start_point}")
+        # tr_logger.plotTr(tr_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
     PATH = "./nets/model_itr/" +name + ".pth" 
     torch.save(comma_model.state_dict(), PATH)
@@ -601,6 +617,7 @@ Note: other loss functions to be used while training other output heads
 # meta_pred_various = meta_pred[:,1:36].reshape(batch_size, 5, 7)
 # meta_pred_blinkers = meta_pred[:,36:].reshape(batch_size, 6, 2)
 # meta_pred_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_pred_engagement)
+# meta_gt_engagement_d = torch.distributions.bernoulli.B        
 # meta_gt_engagement_d = torch.distributions.bernoulli.Bernoulli(logits = meta_eng_gt)
 # meta_engagement_loss = torch.distributions.kl.kl_divergence(meta_pred_engagement_d, meta_gt_engagement_d).mean(dim=0)
 
