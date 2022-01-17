@@ -147,6 +147,7 @@ def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size, mhp_loss = False):
     
     path_head_loss = [path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]
     
+    # TODO: change Bernoulli to Categorical distribution for cross-entropy (can't we just use torch.nn.CrossEntropyLoss?)
     path_pred_prob_d = torch.distributions.bernoulli.Bernoulli(logits = path_pred_prob)
     path_gt_prob_d = torch.distributions.bernoulli.Bernoulli(logits = plan_prob_gt)
     path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
@@ -233,7 +234,7 @@ if __name__ == "__main__":
     prefetch_warmup_time = 2  # seconds wait before starting iterating
 
     #wandb init
-    # run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
+    run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
 
     ### Load data and split in test and train
     printf("=>Loading data")
@@ -289,7 +290,7 @@ if __name__ == "__main__":
     comma_model = load_model(param_scratch_model, pathplan_layer_names,batch_size)
     comma_model = comma_model.to(device)
 
-    # wandb.watch(comma_model) # Log the network weight histograms
+    wandb.watch(comma_model) # Log the network weight histograms
 
     #allowing grad only for path_plan
     for name, param in comma_model.named_parameters():
@@ -351,12 +352,11 @@ if __name__ == "__main__":
 
     printf("just before the wandb run")
 
-    # with run:
-
-    #     wandb.config.lr = lr
-    #     wandb.config.l2 = l2_lambda
-    #     wandb.config.lrs = str(scheduler)
-    #     wandb.config.seed = seed 
+    with run:
+        wandb.config.lr = lr
+        wandb.config.l2 = l2_lambda
+        wandb.config.lrs = str(scheduler)
+        wandb.config.seed = seed 
 
     recurr_tmp = torch.zeros(batch_size,512,dtype = torch.float32)
     
@@ -401,16 +401,16 @@ if __name__ == "__main__":
                     #labels_path_prob[:,i,:,:] -- > [32,5,1]
                     #labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
                     
-                    single_batch_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:], batch_size)
+                    single_step_loss = path_plan_loss(plan_predictions, labels_path[:,i,:,:,:,:], labels_path_prob[:,i,:], batch_size)
                     
-                    # printf("testing single batch Loss:",single_batch_loss.item())
+                    # printf("testing single batch Loss:",single_step_loss.item())
                     
                     if i == seq_len -1:
                         pass
                     else:
                         recurr_state = recurr.clone()
 
-                    batch_loss.append(single_batch_loss)
+                    batch_loss.append(single_step_loss)
 
                 complete_batch_loss = sum(batch_loss)/seq_len # mean of losses over batches of sequences
 
@@ -438,11 +438,13 @@ if __name__ == "__main__":
                     
             # validation loop  
                 with torch.no_grad(): ## saving memory by not accumulating activations   
+                    # TODO: run validation more often (several times per epoch?)
                     if (epoch +1) %check_val_epoch ==0:
                         """
                     visualization
                         """
                         printf("===> visualizing the predictions")
+                        # TODO: use several videos (at least 2, one from training set and one from validation set. Move their paths definition to an external git-ignored file.
                         input_frames, rgb_frames = load_transformed_video( '/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4')
 
                         # print(input_frames.shape, rgb_frames.shape)
@@ -489,13 +491,15 @@ if __name__ == "__main__":
                         video_array = video_array.transpose(0,3,1,2)
 
                         video_log_title = "val_video" + str(epoch)
-                        # wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+                        wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
 
                         val_st_pt = time.time()
                         val_loss_cpu = 0.0
 
+                        # TODO: move this eval to *before* the prediction visualization — that should be done in inference mode as well
                         comma_model.eval()
 
+                        # TODO: add validation loss to the name of the checkpoint
                         checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it
                         torch.save(comma_model.state_dict(), checkpoint_save_path + (str(epoch+1) + ".pth" ))    
                         
@@ -534,11 +538,11 @@ if __name__ == "__main__":
                                 printf(f'Epoch:{epoch+1} ,step [{val_itr+1} of ~{val_loader_len}], loss: {val_loss_cpu/(val_itr+1):.4f}')
 
                         printf(f"Epoch: {epoch+1}, Val Loss: {val_loss_cpu/(val_itr+1):.4f}")
-                        # FIXME: shouldn't the val_loss_cpu on next line be divided by the number of iterations?
-                        # val_logger.plotTr(val_loss_cpu, optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
+                        # TODO: shouldn't the val_loss_cpu on next line be divided by the number of iterations?
+                        val_logger.plotTr(val_loss_cpu/(val_itr+1), optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
                             
         printf(f"Epoch: {epoch+1}, Train Loss: {tr_loss/(tr_it+1)}, time_per_epoch: {time.time() - start_point}")
-        # tr_logger.plotTr(tr_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
+        tr_logger.plotTr(tr_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
     PATH = "./nets/model_itr/" +name + ".pth" 
     torch.save(comma_model.state_dict(), PATH)
