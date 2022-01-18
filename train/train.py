@@ -88,10 +88,23 @@ def visualization(lanelines, roadedges, calib_path, im_rgb):
 
 #Loss functions:
 def mean_std(array):
+    
     mean = array[:,0,:,:]
     mean = mean
+    
     std = array[:,1,:,:]
-    std = torch.exp(std)
+    std = torch.exp(std) ## to escape the negative values
+    
+    """
+    check if the resulting mean and std have values (0,greate than zero]
+    if the resulting values are too small(equivalent to zero) add epsilon to fullfil the bound conditions for pytorch distribution
+    """
+    eps = 1e-10
+    if torch.any(torch.absolute(mean)<eps):
+        mean = torch.add(mean,eps)
+    elif torch.any(torch.absolute(std)<eps):
+        std = torch.add(std,eps)
+
     return mean, std
 
 def calcualte_path_loss(mean1, mean2, std1, std2):
