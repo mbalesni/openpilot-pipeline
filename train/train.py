@@ -110,7 +110,7 @@ def mean_std(array):
 def calcualte_path_loss(mean1, mean2, std1, std2):
     """
     scratch :Laplace or gaussian likelihood 
-    model distillation: gaussian or laplace KL divergence
+    model distillation: gaussian or laplace, KL divergence
     """
     d1 = torch.distributions.laplace.Laplace(mean1, std1)
     d2 = torch.distributions.laplace.Laplace(mean2, std2)
@@ -162,7 +162,7 @@ def path_plan_loss(plan_pred,plan_gt,plan_prob_gt,batch_size, mhp_loss = False):
     
     path_pred_prob_d = torch.distributions.categorical.Categorical(logits = path_pred_prob)
     path_gt_prob_d = torch.distributions.categorical.Categorical(logits = plan_prob_gt)
-    path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).sum(dim=1).mean(dim=0)
+    path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).mean(dim=0)
 
     if not mhp_loss:
         
@@ -363,11 +363,6 @@ if __name__ == "__main__":
     traffic_convention = torch.zeros(batch_size,2, dtype = torch.float32)
     traffic_convention[:,1] =1 
     traffic_convention = traffic_convention.requires_grad_(True).to(device)
-
-    printf("just before the wandb run")
-
-    # with run:
-    #     wandb.config.lr = lr
     #     wandb.config.l2 = l2_lambda
     #     wandb.config.lrs = str(scheduler)
     #     wandb.config.seed = seed 
@@ -384,7 +379,10 @@ if __name__ == "__main__":
     
         recurr_tmp = torch.zeros(batch_size,512,dtype = torch.float32)
 
-        for tr_it , batch in enumerate(train_loader):        
+        for tr_it , batch in enumerate(train_loader):   
+            
+            print("training iteration i am in ", tr_it)
+            
             if args.datatype == "gen_gt" and args.modeltype == "onnx2torch":
                 
                 recurr_state = recurrent_state.clone().requires_grad_(True)
@@ -399,7 +397,6 @@ if __name__ == "__main__":
                 batch_loss = []
                 
                 for i in range(seq_len):
-
                     inputs_to_pretained_model = {"input_imgs":input[:,i,:,:,:],
                                                 "desire": desire,
                                                 "traffic_convention":traffic_convention,
@@ -453,11 +450,13 @@ if __name__ == "__main__":
                         run_loss =0.0
                     
             # validation loop  
-                with torch.no_grad(): ## saving memory by not accumulating activations   
-                    
+                # if (epoch +1) % check_val_epoch ==0: #validate at every 10000 step every epoch
+                if (tr_it +1) % 1000 ==0:
+
                     comma_model.eval()
-                    
-                    if (tr_it% +1) %10000 ==0: #validate at every 10000 step every epoch
+                    ## saving memory by not accumulating activations                          
+                    with torch.no_grad():    
+                        
                         """
                     visualization
                         """
@@ -518,9 +517,9 @@ if __name__ == "__main__":
                         val_loss_cpu = 0.0
 
                         printf(">>>>>validating<<<<<<<")
-
+                        
                         for val_itr, val_batch in enumerate(val_loader):
-
+                            
                             val_stacked_frames, val_plans, val_plans_probs, val_segment_finished, val_sequence_finished = val_batch
 
                             val_input = val_stacked_frames.float().to(device)
