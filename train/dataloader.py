@@ -439,7 +439,7 @@ if __name__ == "__main__":
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
     train_loader = BackgroundGenerator(train_loader)
 
-    valid_dataset = CommaDataset(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches, validation=True)
+    valid_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches, validation=True)
     valid_loader = DataLoader(valid_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
     valid_loader = BatchDataLoader(valid_loader, batch_size=batch_size)
     valid_loader = BackgroundGenerator(valid_loader)
