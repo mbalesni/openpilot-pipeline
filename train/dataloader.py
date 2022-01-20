@@ -78,7 +78,7 @@ def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=
 
 class CommaDataset(IterableDataset):
 
-    def __init__(self, recordings_basedir, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42, single_frame_batches=False):
+    def __init__(self, recordings_basedir, batch_size, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42, single_frame_batches=False):
         super(CommaDataset, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -90,6 +90,7 @@ class CommaDataset(IterableDataset):
 
         Args: ------------------
         """
+        self.batch_size = batch_size
         self.recordings_basedir = recordings_basedir
         self.validation = validation
         self.train_split = train_split
@@ -124,7 +125,7 @@ class CommaDataset(IterableDataset):
     # NOTE: this is a rough estimate (less or equal to the true value). Do NOT rely on this number.
     def __len__(self):
         batches_per_segment = MIN_SEGMENT_LENGTH // self.seq_len
-        return len(self.segment_indices) * batches_per_segment
+        return len(self.segment_indices) * batches_per_segment // self.batch_size
 
     def __iter__(self):
         timing = dict()
@@ -409,7 +410,7 @@ if __name__ == "__main__":
     simulated_forward_time = batch_size * seq_len / simulated_model_fps
 
     # hack to get batches of different segments with many workers
-    train_dataset = CommaDataset(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
+    train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
     train_loader = BackgroundGenerator(train_loader)
