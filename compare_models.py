@@ -337,7 +337,7 @@ if __name__ == '__main__':
 
 
         # inference
-        train_dataset = CommaDataset(comma_recordings_basedir, train_split=train_split, seq_len=seq_len,
+        train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_split, seq_len=seq_len,
                                     shuffle=True, single_frame_batches=single_frame_batches, seed=42)
         train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
                                 prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)

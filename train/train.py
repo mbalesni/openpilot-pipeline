@@ -258,7 +258,7 @@ if __name__ == "__main__":
     if "onnx" in name:
         
         #train loader
-        train_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len,
+        train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=split_per, seq_len=seq_len,
                                     shuffle=True, single_frame_batches=single_frame_batches, seed=42)
         train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
                             prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
@@ -270,7 +270,7 @@ if __name__ == "__main__":
         train_loader = BackgroundGenerator(train_loader)
 
         #val_lodaer 
-        val_dataset = CommaDataset(comma_recordings_basedir, train_split=split_per, seq_len=seq_len, validation=True,
+        val_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=split_per, seq_len=seq_len, validation=True,
                                     shuffle=True, single_frame_batches=single_frame_batches, seed=42)
         val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
                             prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
