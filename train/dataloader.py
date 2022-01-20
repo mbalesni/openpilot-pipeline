@@ -76,6 +76,29 @@ def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=
     return torch.from_numpy(stacked_frames).float(), rgb_frames
 
 
+def parse_affinity(cmd_output):
+    ''' 
+    Extracts the list of CPU ids from the `taskset -cp <pid>` command.
+
+    example input : b"pid 38293's current affinity list: 0-3,96-99,108\n" 
+    example output: [0,1,2,3,96,97,98,99,108]
+    '''
+    ranges_str = cmd_output.decode('utf8').split(': ')[-1].rstrip('\n').split(',')
+
+    list_of_cpus = []
+    for rng in ranges_str:
+        is_range = '-' in rng
+
+        if is_range:
+            start, end = rng.split('-')
+            rng_cpus = range(int(start), int(end)+1) # include end
+            list_of_cpus += rng_cpus
+        else:
+            list_of_cpus.append(int(rng))
+
+    return list_of_cpus
+
+
 class CommaDataset(IterableDataset):
 
     def __init__(self, recordings_basedir, batch_size, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42, single_frame_batches=False):
@@ -128,8 +151,6 @@ class CommaDataset(IterableDataset):
         return len(self.segment_indices) * batches_per_segment // self.batch_size
 
     def __iter__(self):
-        timing = dict()
-
         # shuffle data subset after each epoch
         if self.shuffle:
             rng = np.random.default_rng(self.seed)
@@ -145,12 +166,13 @@ class CommaDataset(IterableDataset):
             num_workers = worker_info.num_workers
 
         worker_pid = os.getpid()
-        cores_per_worker = os.cpu_count() // num_workers
+        avail_cpus = parse_affinity(subprocess.check_output(f'taskset -pc {worker_pid}', shell=True))
+        validation_term = 1 if self.validation else 0  # support two loaders at a time
+        offset = len(avail_cpus) - (num_workers * 2) # keep the first few cpus free (it seemed they were faster, important for BackgroundGenerator)
+        cpu_idx = offset + num_workers * validation_term + worker_id
 
-        # force the process to be gentle, i.e. use no more than `cores_per_worker` cores instead of all
-        
-        ### uncomment the below line for making the dataloader more efficient.
-        #subprocess.check_output(f'taskset -pc {worker_id*cores_per_worker}-{worker_id*cores_per_worker+cores_per_worker-1} {worker_pid}', shell=True)
+        # force the process to only use 1 core instead of all
+        subprocess.check_output(f'taskset -pc {avail_cpus[cpu_idx]} {worker_pid}', shell=True)
 
         for segment_vidx in range(worker_id, len(self.segment_indices), num_workers):
 
@@ -195,7 +217,7 @@ class CommaDataset(IterableDataset):
                     yuv_frame2 = bgr_to_yuv(frame2)
 
                     if self.single_frame_batches:
-                        prepared_frames = transform_frames([yuv_frame1, yuv_frame2], timing)
+                        prepared_frames = transform_frames([yuv_frame1, yuv_frame2])
                     else:
                         yuv_frame_seq[t_idx] = yuv_frame2
 
@@ -368,9 +390,11 @@ class BackgroundGenerator(threading.Thread):
             while next_item is not None:
                 yield next_item
                 next_item = self.queue.get()
-        except (ConnectionResetError, ConnectionRefusedError):
+        except (ConnectionResetError, ConnectionRefusedError) as err:
+            printf('[BackgroundGenerator] Error:', err)
             self.stop()
             raise StopIteration
+
 """
 Loader for visualization
 """
@@ -396,11 +420,11 @@ if __name__ == "__main__":
     else:
         comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    batch_size = num_workers =30  # MUST BE batch_size == num_workers
+    batch_size = num_workers = 30  # MUST BE batch_size == num_workers
     seq_len = 100
     prefetch_factor = 2
-    prefetch_warmup_time = 2  # seconds wait before starting iterating
-    train_split = 0.8
+    prefetch_warmup_time = 0  # seconds wait before starting iterating
+    train_split = 0.99
     single_frame_batches = False  # set True to serve batches of single frames instead of sequences
 
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
@@ -415,13 +439,23 @@ if __name__ == "__main__":
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
     train_loader = BackgroundGenerator(train_loader)
 
+    valid_dataset = CommaDataset(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches, validation=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+    valid_loader = BatchDataLoader(valid_loader, batch_size=batch_size)
+    valid_loader = BackgroundGenerator(valid_loader)
+
     printf("Checking loader shapes...")
     printf()
     for epoch in range(3):
+
+        start_time = time.time()
+
         for idx, batch in enumerate(train_loader):
+            batch_load_time = time.time() - start_time
+
             frames, plans, plans_probs, segment_finished, sequence_finished = batch
 
-            printf(f'Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
+            printf(f'{batch_load_time:.2f}s — Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
 
             if idx == 0:
                 printf(f'Warming up pre-fetching {prefetch_warmup_time}s...')
@@ -429,4 +463,6 @@ if __name__ == "__main__":
 
             # <model goes here>
             time.sleep(simulated_forward_time)
+
+            start_time = time.time()
 
