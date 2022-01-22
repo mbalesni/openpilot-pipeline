@@ -8,7 +8,6 @@ from torch.nn.modules.linear import Identity
 from torch.nn.modules.rnn import LSTM
 import torchvision
 import numpy as np
-from torchsummary import summary
 
 """
 To do:: code refactoring, class summary and arguments description

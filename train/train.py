@@ -6,14 +6,19 @@ from tqdm import tqdm
 import torch 
 import torch.nn as nn
 import torch.optim as topt
-from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video
+from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video, configure_worker
 from torch.utils.data import DataLoader
 from model import *
 from onnx2pytorch import ConvertModel
 import onnx
 import wandb
-from timing import *
 from utils import Calibration, draw_path, printf, extract_preds
+import os
+import warnings
+
+# PyTorch assumes each DataLoader worker to return a batch, but we return a single sample, so the length warning is a false alarm.
+warnings.filterwarnings("ignore", category=UserWarning, message='Length of IterableDataset')
+
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -225,9 +230,9 @@ if __name__ == "__main__":
     date_it  = "16Jan_1_seg"
     name = "onnx_gen_gt_comma_pipeline_" + date_it
     comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
+    # comma_recordings_basedir = "/home/nikita/data"
     path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
     onnx_path = '../common/models/supercombo.onnx'
-    n_workers = 10
     lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
     diff_lr = False
     recurr_warmup = True
@@ -242,8 +247,7 @@ if __name__ == "__main__":
     check_val_epoch =2
     batch_size = num_workers = args.batch_size # MUST BE batch_size == num_workers
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
-    split_per = 0.8
-    single_frame_batches = False
+    split_per = 0.98
     prefetch_factor = 1
     seq_len = 100
     prefetch_warmup_time = 2  # seconds wait before starting iterating
@@ -254,14 +258,15 @@ if __name__ == "__main__":
     ### Load data and split in test and train
     printf("=>Loading data")
     printf("=>Preparing the dataloader")
+    printf(f"=>Batch size is {batch_size}")
 
     if "onnx" in name:
         
         #train loader
         train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=split_per, seq_len=seq_len,
-                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
+                                    shuffle=True, seed=42)
         train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
-                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
         train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
         train_loader_len = len(train_loader)
         
@@ -271,9 +276,9 @@ if __name__ == "__main__":
 
         #val_lodaer 
         val_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=split_per, seq_len=seq_len, validation=True,
-                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
+                                    shuffle=True, seed=42)
         val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
-                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
         val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
         val_loader_len = len(val_loader)
         
@@ -555,6 +560,7 @@ if __name__ == "__main__":
                         val_loss_name = str(val_loss_cpu/(val_itr+1))
 
                         checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it + val_loss_name
+                        os.makedirs(os.path.dirname(checkpoint_save_path), exist_ok=True)
                         torch.save(comma_model.state_dict(), checkpoint_save_path + "_" +(str(epoch+1) + ".pth" ))    
                         
                         # val_logger.plotTr(val_loss_cpu/(val_itr+1), optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
