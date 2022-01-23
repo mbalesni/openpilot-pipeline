@@ -216,9 +216,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # for reproducibility 
-    seed = np.random.randint(2**16)
-    torch.manual_seed(seed)
-    print("=>seed={}".format(seed))
+    torch.manual_seed(args.seed)
+    print("=>seed={}".format(args.seed))
 
 
     # intializing the object of the logger class 
