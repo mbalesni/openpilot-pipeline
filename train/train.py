@@ -6,14 +6,19 @@ from tqdm import tqdm
 import torch 
 import torch.nn as nn
 import torch.optim as topt
-from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video
+from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video, configure_worker
 from torch.utils.data import DataLoader
 from model import *
 from onnx2pytorch import ConvertModel
 import onnx
 import wandb
-from timing import *
 from utils import Calibration, draw_path, printf, extract_preds
+import os
+import warnings
+
+# PyTorch assumes each DataLoader worker to return a batch, but we return a single sample, so the length warning is a false alarm.
+warnings.filterwarnings("ignore", category=UserWarning, message='Length of IterableDataset')
+
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -24,6 +29,7 @@ class Logger:
         self.prefix = prefix
         
     def plotTr( self, loss, lr, time, epoch=-1 ):
+        # TODO: @nikebless look into this logic, looks suspicious.
         if epoch == -1:
             self.cur_ep += 1
         else: self.cur_ep = epoch
@@ -42,7 +48,7 @@ def load_model(params_scratch, pathplan, batch_size):
             onnx_model = onnx.load(onnx_path)
             model = ConvertModel(onnx_model, experimental= True)  #pretrained_model
             
-            ##hack to enable batch_size>1 for onnx2pytorch for our case :TODO-- results differ in onnxruntime--keras and onnx2pytorch
+            # hack to enable batch_size>1 for onnx2pytorch
             model.Constant_1047.constant = torch.tensor((batch_size,2,66))
             model.Reshape_1048.shape = (batch_size,2,66)
             model.Constant_1049.constant = torch.tensor((batch_size,2,66))
@@ -199,11 +205,6 @@ if __name__ == "__main__":
         device = torch.device("cpu")
     print("=> using '{}' for computation.".format(device))
 
-    #for reproducibility 
-    seed = np.random.randint(2**16)
-    torch.manual_seed(seed)
-    print("=>seed={}".format(seed))
-
     print("=>intializing CLI args")
     # CLI parser 
     parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
@@ -211,24 +212,35 @@ if __name__ == "__main__":
     parser.add_argument("--phase", type =str, default="train", choices = ["train", "test"])
     parser.add_argument("--batch_size", type= int, default=1, help = "batch size")
     parser.add_argument("--modeltype", type = str, default = "scratch", choices= ["scratch", "onnx2torch"], help = "choose type of model for train")
+    parser.add_argument("--seed", type = int, default = 42, help = "random seed")
     args = parser.parse_args()
 
-        
-    ## intializing the object of the logger class 
-    printf("=>intialzing wandb Logger class")
+    # for reproducibility 
+    torch.manual_seed(args.seed)
+    print("=>seed={}".format(args.seed))
+
+
+    # intializing the object of the logger class 
+    printf("=>intializing wandb Logger class")
 
     tr_logger = Logger("train")
     val_logger = Logger("validation")
 
     printf("=>intializing hyperparams")
-    #Hyperparams
+
     date_it  = "16Jan_1_seg"
-    name = "onnx_gen_gt_comma_pipeline_" + date_it
+    train_run_name = "onnx_gen_gt_comma_pipeline_" + date_it
     comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
-    path_npz_dummy = ["inputdata.npz","gtdata.npz"] # dummy data_path
+    # comma_recordings_basedir = "/home/nikita/data"
     onnx_path = '../common/models/supercombo.onnx'
-    n_workers = 10
-    lr = (0.001, 2e-4, 1e-3) ## (lr_conv, lr_gru, lr_outhead)
+
+    checkpoints_dir = './nets/checkpoints'
+    result_model_dir = './nets/model_itr'
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    os.makedirs(result_model_dir, exist_ok=True)
+
+    # Hyperparams
+    lr = (0.001, 2e-4, 1e-3) # (lr_conv, lr_gru, lr_outhead)
     diff_lr = False
     recurr_warmup = True
     l2_lambda = (1e-4,1e-4,1e-4) 
@@ -242,26 +254,26 @@ if __name__ == "__main__":
     check_val_epoch =2
     batch_size = num_workers = args.batch_size # MUST BE batch_size == num_workers
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
-    split_per = 0.8
-    single_frame_batches = False
+    split_per = 0.98
     prefetch_factor = 1
     seq_len = 100
     prefetch_warmup_time = 2  # seconds wait before starting iterating
 
-    #wandb init
-    # run = wandb.init(project="test-project", entity="openpilot_project", name = name, reinit= True, tags= ["supercombbo pretrain"])
+    # wandb init
+    # run = wandb.init(project="test-project", entity="openpilot_project", train_run_name = train_run_name, reinit= True, tags= ["supercombbo pretrain"])
 
-    ### Load data and split in test and train
+    # Load data and split in test and train
     printf("=>Loading data")
     printf("=>Preparing the dataloader")
+    printf(f"=>Batch size is {batch_size}")
 
-    if "onnx" in name:
+    if "onnx" in train_run_name:
         
         #train loader
         train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=split_per, seq_len=seq_len,
-                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
+                                    shuffle=True, seed=42)
         train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
-                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
         train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
         train_loader_len = len(train_loader)
         
@@ -271,9 +283,9 @@ if __name__ == "__main__":
 
         #val_lodaer 
         val_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=split_per, seq_len=seq_len, validation=True,
-                                    shuffle=True, single_frame_batches=single_frame_batches, seed=42)
+                                    shuffle=True, seed=42)
         val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False,
-                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+                            prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
         val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
         val_loader_len = len(val_loader)
         
@@ -308,7 +320,7 @@ if __name__ == "__main__":
 
     # wandb.watch(comma_model) # Log the network weight histograms
 
-    #allowing grad only for path_plan
+    # allowing grad only for path_plan
     for name, param in comma_model.named_parameters():
         name_layer= name.split(".")
         if name_layer[0] in pathplan_layer_names:
@@ -316,8 +328,8 @@ if __name__ == "__main__":
         else:
             param.requires_grad = False
 
-    ## Define optimizer and scheduler
-    #diff. learning rate for different parts of the network.
+    # Define optimizer and scheduler
+    # diff. learning rate for different parts of the network.
     if not diff_lr:
         param_group = comma_model.parameters()
 
@@ -350,7 +362,7 @@ if __name__ == "__main__":
     
     # def train(run, batch_size):
     
-    ### train loop 
+    # train loop 
     # initializing recurrent state by zeros
     recurrent_state = torch.zeros(batch_size,512,dtype = torch.float32)
     recurrent_state = recurrent_state.to(device)
@@ -431,7 +443,7 @@ if __name__ == "__main__":
                 else:
                     complete_batch_loss.backward(retain_graph = True)
 
-                loss_cpu = complete_batch_loss.detach().clone().item() ## loss for one iteration
+                loss_cpu = complete_batch_loss.detach().clone().item()  # loss for one iteration
                 
                 recurr_state = recurr
 
@@ -445,7 +457,7 @@ if __name__ == "__main__":
                     # TODO: for @nikebless, verify that the running loss is computed correctly
                    
                     if (tr_it+1) %100 == 0:
-                        # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point ) ## add get current learning rate adjusted by the scheduler.
+                        # tr_logger.plotTr( run_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point )  # add get current learning rate adjusted by the scheduler.
                         scheduler.step(run_loss/100)
                         run_loss =0.0
                     
@@ -454,7 +466,7 @@ if __name__ == "__main__":
                 if (tr_it +1) % 1000 ==0:
 
                     comma_model.eval()
-                    ## saving memory by not accumulating activations                          
+                    # saving memory by not accumulating activations                          
                     with torch.no_grad():    
                         
                         """
@@ -473,7 +485,7 @@ if __name__ == "__main__":
                             video_array = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
                             # print(video_array.shape)
 
-                            for itr in range(int(np.round(input_frames.shape[0]/batch_size))): ## ---eg. for batch_size 32 skipping 6 frames for video
+                            for itr in range(int(np.round(input_frames.shape[0]/batch_size))): # ---eg. for batch_size 32 skipping 6 frames for video
             
                                 start_indx, end_indx = itr * batch_size , (itr +1) * batch_size
                 
@@ -534,8 +546,8 @@ if __name__ == "__main__":
                                                         "traffic_convention":traffic_convention,
                                                         "initial_state": recurr_state}
                             
-                                val_outputs = comma_model(**val_inputs_to_pretained_model) ## --> [32,6472]
-                                val_path_prediction = val_outputs[:,:4955].clone() ## --> [32,4955]
+                                val_outputs = comma_model(**val_inputs_to_pretained_model) # --> [32,6472]
+                                val_path_prediction = val_outputs[:,:4955].clone() # --> [32,4955]
 
                                 # val_labels_path_prob[:,i,:,:] -- > [32,5,1]
                                 # val_labels_path[:,i,:,:,:,:] --> [32,5,2,33,15]
@@ -554,17 +566,18 @@ if __name__ == "__main__":
                         
                         val_loss_name = str(val_loss_cpu/(val_itr+1))
 
-                        checkpoint_save_path = "./nets/checkpoints/commaitr" + date_it + val_loss_name
-                        torch.save(comma_model.state_dict(), checkpoint_save_path + "_" +(str(epoch+1) + ".pth" ))    
+                        checkpoint_save_file = 'commaitr' + date_it + val_loss_name + '_' + str(epoch+1) + ".pth"
+                        checkpoint_save_path = os.path.join(checkpoints_dir, checkpoint_save_file)
+                        torch.save(comma_model.state_dict(), checkpoint_save_path)    
                         
                         # val_logger.plotTr(val_loss_cpu/(val_itr+1), optimizer.param_groups[0]['lr'], time.time() - val_st_pt)
                             
         printf(f"Epoch: {epoch+1}, Train Loss: {tr_loss/(tr_it+1)}, time_per_epoch: {time.time() - start_point}")
         # tr_logger.plotTr(tr_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
-    PATH = "./nets/model_itr/" +name + ".pth" 
-    torch.save(comma_model.state_dict(), PATH)
-    printf( "Saved trained model" )
+    result_model_save_path = os.path.join(result_model_dir, train_run_name + '.pth')
+    torch.save(comma_model.state_dict(), result_model_save_path)
+    printf("Saved trained model" )
     printf("training_finished")
 
 """
