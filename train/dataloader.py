@@ -130,7 +130,7 @@ def configure_worker(worker_id):
     validation_term = 1 if dataset.validation else 0  # support two loaders at a time
     offset = len(avail_cpus) - (num_workers * 2) # keep the first few cpus free (it seemed they were faster, important for BackgroundGenerator)
     cpu_idx = max(offset + num_workers * validation_term + worker_id, 0)
-    printf(f'Worker {worker_id} using CPU {avail_cpus[cpu_idx]}')
+    printf(f'Worker {worker_id + (validation_term * num_workers)} using CPU {avail_cpus[cpu_idx]}')
 
     # force the process to only use 1 core instead of all
     set_affinity(worker_pid, [avail_cpus[cpu_idx]])
@@ -393,6 +393,8 @@ class BackgroundGenerator(multiprocessing.Process):
         try:
             next_item = self.queue.get()
             while next_item is not None:
+                # TODO: how can we pin before this loop runs?
+                # next_item = [item.pin_memory() for item in next_item]
                 yield next_item
                 next_item = self.queue.get()
         except (ConnectionResetError, ConnectionRefusedError) as err:

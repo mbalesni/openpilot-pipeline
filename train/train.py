@@ -16,6 +16,8 @@ from model import load_model
 
 # PyTorch assumes each DataLoader worker to return a batch, but we return a single sample, so the length warning is a false alarm.
 warnings.filterwarnings("ignore", category=UserWarning, message='Length of IterableDataset')
+warnings.filterwarnings("ignore", category=UserWarning, message='The given NumPy array is not writeable, and PyTorch does not support non-writeable tensors')
+warnings.filterwarnings("ignore", category=UserWarning, message='Using experimental implementation that allows \'batch_size > 1\'')
 
 
 torch.autograd.set_detect_anomaly(True)
@@ -186,8 +188,8 @@ if __name__ == "__main__":
 
     date_it = "16Jan_1_seg"
     train_run_name = "onnx_gen_gt_comma_pipeline_" + date_it
-    # comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
-    comma_recordings_basedir = "/home/nikita/data"
+    comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
+    # comma_recordings_basedir = "/home/nikita/data"
     path_to_supercombo = '../common/models/supercombo.onnx'
 
     checkpoints_dir = './nets/checkpoints'
@@ -210,10 +212,10 @@ if __name__ == "__main__":
     check_val_epoch = 2
     batch_size = num_workers = args.batch_size  # MUST BE batch_size == num_workers
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
-    split_per = 0.5
+    split_per = 0.98
     prefetch_factor = 2
     seq_len = 100
-    prefetch_warmup_time = 2  # seconds wait before starting iterating
+    prefetch_warmup_time = 10  # seconds wait before starting iterating
 
     # only this part of the netwrok is currently trained.
     pathplan_layer_names = ["Gemm_959", "Gemm_981", "Gemm_983", "Gemm_1036"]
@@ -300,8 +302,9 @@ if __name__ == "__main__":
         timings = dict()
 
         for tr_it, batch in enumerate(train_loader):
+            fps = batch_size * seq_len / processing_time if processing_time > 0 else 0
             printf()
-            printf(f"[Prev batch done {processing_time:.2f}s. New batch loaded {time.time() - batch_load_start:.2f}s] - training iteration i am in ", tr_it)
+            printf(f"[Last batch processed: {processing_time:.2f}s (FPS={fps:.2f}). Waited new batch: {time.time() - batch_load_start:.2f}s] - training iteration i am in ", tr_it)
 
             processing_time_start = time.time()
 
@@ -313,7 +316,7 @@ if __name__ == "__main__":
             batch_size_empirical = stacked_frames.shape[0]
 
             with Timing(timings, 'inputs_to_gpu'):
-                stacked_frames = stacked_frames.float().to(device)  # -- (batch_size, seq_len, 12, 128, 256)
+                stacked_frames = stacked_frames.to(device).float()  # -- (batch_size, seq_len, 12, 128, 256)
                 gt_plans = gt_plans.to(device)  # -- (batch_size,seq_len,5,2,33,15)
                 gt_plans_probs = gt_plans_probs.to(device)  # -- (batch_size,seq_len,5,1)
 
@@ -374,7 +377,13 @@ if __name__ == "__main__":
             if (tr_it+1) % 10 == 0:
                 printf(f'{epoch+1}/{epochs}, step [{tr_it+1} of ~{train_loader_len}], loss: {tr_loss/(tr_it+1):.4f}')
 
+                timings['recurr_state_clone']['time'] *= seq_len
+                timings['forward_pass']['time'] *= seq_len
+                timings['plan_preds_clone']['time'] *= seq_len
+                timings['path_plan_loss']['time'] *= seq_len
+
                 pprint_stats(timings)
+                timings = dict()
                 printf()
                 # TODO: for @nikebless, verify that the running loss is computed correctly
 

@@ -9,6 +9,6 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=60
 #SBATCH --gres=gpu:tesla:1
-#SBATCH --exclude=falcon4
+#SBATCH --exclude=pegasus,pegasus2
 
-srun python train.py --datatype "gen_gt" --phase "train" --batch_size 10 --modeltype "onnx2torch"
+srun python train.py --batch_size 29
