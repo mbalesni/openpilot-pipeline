@@ -15,7 +15,7 @@ from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_
 from torch.utils.data import DataLoader
 import wandb
 from timing import Timing, pprint_stats
-from utils import Calibration, draw_path, printf, extract_preds
+from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5
 import os
 from model import load_model
 
@@ -249,7 +249,7 @@ def validate(model, data_loader, device, batch_size, desire, traffic_convention,
             video_array = np.zeros(
                 ((int(np.round(input_frames.shape[0]/batch_size)*batch_size), rgb_frames.shape[1], rgb_frames.shape[2], rgb_frames.shape[3])))
 
-            # TODO: check the logic of the following loop
+            # TODO: @nikebless check the logic of the following loop
             for itr in range(int(np.round(input_frames.shape[0]/batch_size))):  # ---eg. for batch_size 32 skipping 6 frames for video
 
                 start_indx, end_indx = itr * batch_size, (itr + 1) * batch_size
@@ -268,30 +268,49 @@ def validate(model, data_loader, device, batch_size, desire, traffic_convention,
 
                 batch_vis_img = np.zeros((preds.shape[0], rgb_frames.shape[1], rgb_frames.shape[2], rgb_frames.shape[3]))
 
-                # FIXME: this `i` overwrites the one from the `val_video_paths` loop, probably need to fix this
-                for i in range(preds.shape[0]):
+                for j in range(preds.shape[0]):
 
-                    pred_it = preds[i][np.newaxis, :]
+                    pred_it = preds[j][np.newaxis, :]
                     lanelines, road_edges, best_path = extract_preds(pred_it)[0]
 
-                    im_rgb = itr_rgb_frames[i]
+                    im_rgb = itr_rgb_frames[j]
 
                     image = visualization(lanelines, road_edges, best_path, im_rgb)
 
-                    batch_vis_img[i] = image
+                    batch_vis_img[j] = image
 
-                video_array[start_indx:end_indx, :, :, :] = batch_vis_img
+                    video_array[start_indx:end_indx, :, :, :] = batch_vis_img
+                
+                ## groundtruth_visualization ##
+                video_array_gt = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
 
-            video_array = video_array.transpose(0, 3, 1, 2)
+                # plan, plan_prob, lanelines, lanelines_prob, road_edg, road_edg_std,file
+                plan_gt_h5, plan_prob_gt_h5, laneline_gt_h5, laneline_prob_gt_h5, road_edg_gt_h5, road_edgstd_gt_h5, h5_file_object = load_h5(val_video_paths[i])
 
+                for k in range(plan_gt_h5.shape[0]):
+                    
+                    lane_h5, roadedg_h5, path_h5 = extract_gt(plan_gt_h5[k:k+1], plan_prob_gt_h5[k:k+1], laneline_gt_h5[k:k+1], laneline_prob_gt_h5[k:k+1], road_edg_gt_h5[k:k+1], road_edgstd_gt_h5[k:k+1])[0]
+                    image_rgb_gt = rgb_frames[k]
 
-            # TODO: how do we know which one is train/validation?
-            # if i == 0:
-            #     video_log_title = "val_video_trainset" + str(epoch)
-            # else:
-            #     video_log_title = "val_video_valset" + str(epoch)
+                    image_gt = visualization(lane_h5, roadedg_h5, path_h5, image_rgb_gt)
+                    video_array_gt[k:k+1,:,:,:] = image_gt
+                
+                h5_file_object.close()
 
-            # wandb.log({video_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+                video_array = video_array.transpose(0, 3, 1, 2)
+                video_array_gt = video_array_gt.transpose(0,3,1,2)
+                
+                # TODO: how do we know which one is train/validation?
+                if i == 0:
+                    video_pred_log_title = "val_video_trainset" + str(epoch)
+                    video_gt_log_title = "gt_video_trainset" + str(epoch)
+                else:
+                    video_pred_log_title = "val_video_valset" + str(epoch)
+                    video_gt_log_title = "gt_video_valset" + str(epoch)
+
+            # TODO: remove epoch from the name of the file, wandb will automatically add stepping
+            # wandb.log({video_pred_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+            # wandb.log({video_gt_log_title: wandb.Video(video_array_gt, fps = 20, format= 'mp4')})
 
         val_st_pt = time.time()
         val_loss = 0.0
@@ -508,9 +527,11 @@ if __name__ == "__main__":
     comma_model = comma_model.to(device)
 
     # wandb.watch(comma_model) # Log the network weight histograms
+    # with run:
     #     wandb.config.l2 = l2_lambda
     #     wandb.config.lrs = str(scheduler)
-    #     wandb.config.seed = seed
+    #     wandb.config.lr = lr
+    #     wandb.config.batch_size = batch_size
 
     param_group = comma_model.parameters()
     optimizer = topt.Adam(param_group, lr, weight_decay=l2_lambda)
