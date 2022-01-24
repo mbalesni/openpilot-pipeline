@@ -386,6 +386,12 @@ class BackgroundGenerator(multiprocessing.Process):
     def run(self):
         while True:
             for item in self.generator:
+
+                # do not start (blocking) insertion into a full queue, just wait and then retry
+                # this way we do not block the consumer process, allowing instant batch fetching for the model
+                while self.queue.full():
+                    time.sleep(2)
+
                 self.queue.put(item)
             self.queue.put(None)
 
@@ -399,7 +405,7 @@ class BackgroundGenerator(multiprocessing.Process):
                 next_item = self.queue.get()
         except (ConnectionResetError, ConnectionRefusedError) as err:
             printf('[BackgroundGenerator] Error:', err)
-            self.stop()
+            self.shutdown()
             raise StopIteration
 
 """
