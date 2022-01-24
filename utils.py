@@ -6,6 +6,7 @@ import math
 import os
 import cv2
 import glob
+import h5py
 #from tools.lib.logreader import LogReader
 
 
@@ -37,6 +38,67 @@ def get_segment_dirs(base_dir, video_names=['video.hevc', 'fcamera.hevc']):
         paths_to_videos += paths
     return sorted(list(set([os.path.dirname(f) for f in paths_to_videos])))
 
+
+def load_h5(seg_path):
+
+    file_path = os.path.join(seg_path, 'gt_hacky.h5')
+    print(os.path.exists(file_path))
+    file = h5py.File(file_path,'r')
+
+    plan = file['plans']
+    plan_prob = file['plans_prob']
+    lanelines = file['lanelines']
+    lanelines_prob = file['laneline_probs']
+    road_edg = file['road_edges']
+    road_edg_std = file['road_edge_stds']
+    
+    
+    return plan, plan_prob, lanelines, lanelines_prob, road_edg, road_edg_std,file
+
+def extract_gt(plan_gt, plan_prob_gt, lanelines_gt, lanelines_prob_gt, road_edg_gt, road_edg_std_gt, best_plan_only=True):
+    
+#     print(lanelines_gt.shape)
+    
+    # plan
+    plans = plan_gt # (N, 5, 2, 33, 15)
+    best_plan_idx = np.argmax(plan_prob_gt, axis=1)[0]  # (N,)
+    best_plan = plans[:, best_plan_idx, ...]  # (N, 2, 33, 15)
+
+    ## lane lines
+    outer_left_lane = lanelines_gt[:, 0, :, :]  # (N, 33, 2)
+    inner_left_lane = lanelines_gt[:, 1, :, :]  # (N, 33, 2)
+    inner_right_lane = lanelines_gt[:, 2, :, :]  # (N, 33, 2)
+    outer_right_lane = lanelines_gt[:, 3, :, :]  # (N, 33, 2)
+
+    ## lane lines probs
+    outer_left_prob = lanelines_prob_gt[:, 0]  # (N,)
+    inner_left_prob = lanelines_prob_gt[:, 1]  # (N,)
+    inner_right_prob = lanelines_prob_gt[:, 2]  # (N,)
+    outer_right_prob = lanelines_prob_gt[:, 3]  # (N,)
+
+    ## road edges
+    left_edge = road_edg_gt[:, 0, :, :]  # (N, 33, 2)
+    right_edge = road_edg_gt[:, 1, :, :]
+    left_edge_std = road_edg_std_gt[:, 0, :, :]  # (N, 33, 2)
+    right_edge_std = road_edg_std_gt[:, 1, :, :]
+
+    batch_size = best_plan.shape[0]
+    
+    result_batch = []
+    
+    # each element of the output list is a tuple of predictions at respective sample_idx
+    for i in range(batch_size):
+        lanelines = [outer_left_lane[i], inner_left_lane[i], inner_right_lane[i], outer_right_lane[i]]
+        lanelines_probs = [outer_left_prob[i], inner_left_prob[i], inner_right_prob[i], outer_right_prob[i]]
+        road_edges = [left_edge[i], right_edge[i]]
+        road_edges_probs = [left_edge_std[i], right_edge_std[i]]
+
+        if best_plan_only:
+            plan = best_plan[i]
+
+        result_batch.append(((lanelines, lanelines_probs), (road_edges, road_edges_probs), plan))
+
+    return result_batch
 
 def extract_preds(outputs, best_plan_only=True):
     # N is batch_size
