@@ -398,7 +398,7 @@ if __name__ == "__main__":
 
             # validation loop
             #validate at every 10000 step every epoch
-            if (tr_it + 1) % 1000 == 0:
+            if (tr_it + 1) % 400 == 0:
 
                 comma_model.eval()
                 # saving memory by not accumulating activations
