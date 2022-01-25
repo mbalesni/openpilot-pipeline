@@ -208,7 +208,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, desire, traffic
             with Timing(timings, 'scheduler_step'):
                     # this should use validation, not training loss. And it should NOT be cumulative loss, it should be *current* loss.
                     # see example in the end here: https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.ReduceLROnPlateau.html#reducelronplateau
-                    scheduler.step(val_loss.item()/log_frequency_steps)
+                    scheduler.step(val_loss.item())
 
             checkpoint_save_file = 'commaitr' + date_it + str(val_loss) + '_' + str(epoch+1) + ".pth"
             checkpoint_save_path = os.path.join(checkpoints_dir, checkpoint_save_file)
