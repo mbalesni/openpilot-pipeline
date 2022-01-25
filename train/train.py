@@ -521,7 +521,7 @@ if __name__ == "__main__":
 
     val_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_val_split, seq_len=seq_len,
                                validation=True, shuffle=True, seed=42)
-    val_segment_for_viz = None # os.path.dirname(val_dataset.hevc_file_paths[val_dataset.segment_indices[0]])
+    val_segment_for_viz = os.path.dirname(val_dataset.hevc_file_paths[val_dataset.segment_indices[0]])
     val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor,
                             persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
     val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
