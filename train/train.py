@@ -453,7 +453,7 @@ if __name__ == "__main__":
     print("=>initializing CLI args")
     # CLI parser
     parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
-    parser.add_argument("--batch_size", type=int, default=1, help="batch size")
+    parser.add_argument("--batch_size", type=int, default=28, help="batch size")
     parser.add_argument("--date_it", type=str, required=True, help="run date/name")  # "16Jan_1_seg"
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs")
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
