@@ -336,6 +336,7 @@ class Calibration:
         ep = self.extrinsics_matrix.dot(car_space_projective)
         kep = self.intrinsic.dot(ep)
         # TODO: fix numerical instability (add 1e-16)
+        # UPD: this turned out to slow things down a lot. How do we do it then?
         return (kep[:-1, :] / kep[-1, :]).T
 
     def car_space_to_bb(self, x, y, z):

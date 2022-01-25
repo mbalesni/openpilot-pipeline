@@ -18,6 +18,7 @@ from timing import Timing, pprint_stats
 from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5
 import os
 from model import load_model
+import gc
 
 
 class WandbLogger:
@@ -157,7 +158,7 @@ def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, tr_logger, val_logger, 
-          log_frequency_steps, train_segment_for_viz, val_segment_for_viz):
+          log_frequency_steps, train_segment_for_viz, val_segment_for_viz, batch_size):
 
     recurr_input = torch.zeros(batch_size, 512, dtype=torch.float32, device=device, requires_grad=True)
     desire = torch.zeros(batch_size, 8, dtype=torch.float32, device=device)
@@ -178,8 +179,6 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
 
         train_batch_start = time.time()
         should_backprop = (not recurr_warmup) or (recurr_warmup and not segments_finished)
-
-        printf('New segment?', segments_finished, 'Should backprop?', should_backprop)
 
         stacked_frames, gt_plans, gt_plans_probs, segments_finished = batch
         segments_finished = torch.all(segments_finished)
@@ -212,7 +211,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
             # tr_logger.plotTr( running_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point )  # add get current learning rate adjusted by the scheduler.
 
         if (tr_it + 1) % val_frequency_steps == 0:
-            val_loss, val_time = validate(model, val_loader, device, train_segment_for_viz, val_segment_for_viz)
+            val_loss, val_time = validate(model, val_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz)
 
             with Timing(timings, 'scheduler_step'):
                     # this should use validation, not training loss. And it should NOT be cumulative loss, it should be *current* loss.
@@ -237,7 +236,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
     return recurr_input
 
 
-def validate(model, data_loader, device, train_segment_for_viz, val_segment_for_viz):
+def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz):
 
     model.eval()
     # saving memory by not accumulating activations
@@ -252,6 +251,7 @@ def validate(model, data_loader, device, train_segment_for_viz, val_segment_for_
         for i in range(len(segments_for_viz)):
 
             path_to_segment = segments_for_viz[i]
+            printf(f"===> visualizing the predictions for segment {path_to_segment}")
 
             recurr_input = torch.zeros(1, 512, dtype=torch.float32, device=device, requires_grad=False)
             desire = torch.zeros(1, 8, dtype=torch.float32, device=device)
@@ -261,10 +261,9 @@ def validate(model, data_loader, device, train_segment_for_viz, val_segment_for_
             input_frames, rgb_frames = load_transformed_video(path_to_segment)
             input_frames = input_frames.to(device)
 
-            video_array_pred = np.zeros((rgb_frames.shape[0],rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3]))
+            video_array_pred = np.zeros((rgb_frames.shape[0],rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3]), dtype=np.uint8)
 
             for t_idx in range(rgb_frames.shape[0]): 
-
                 inputs =  {"input_imgs":input_frames[t_idx:t_idx+1],
                                 "desire": desire,
                                 "traffic_convention": traffic_convention,
@@ -272,7 +271,7 @@ def validate(model, data_loader, device, train_segment_for_viz, val_segment_for_
                                 }
 
                 outs = model(**inputs)
-                recurr_input = outs[:,5960:] # refeeding the recurrent state
+                recurr_input = outs[:, 5960:] # refeeding the recurrent state
                 preds = outs.detach().cpu().numpy() #(1,6472)
 
                 lanelines, road_edges, best_path = extract_preds(preds)[0]
@@ -280,7 +279,7 @@ def validate(model, data_loader, device, train_segment_for_viz, val_segment_for_
                 vis_image = visualization(lanelines,road_edges,best_path, im_rgb)
                 video_array_pred[t_idx:t_idx+1,:,:,:] = vis_image
 
-            video_array_gt = np.zeros((rgb_frames.shape[0],rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3]))
+            video_array_gt = np.zeros((rgb_frames.shape[0],rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3]), dtype=np.uint8)
             plan_gt_h5, plan_prob_gt_h5, laneline_gt_h5, laneline_prob_gt_h5, road_edg_gt_h5, road_edgstd_gt_h5 = load_h5(path_to_segment)
 
             for k in range(plan_gt_h5.shape[0]):
@@ -305,12 +304,17 @@ def validate(model, data_loader, device, train_segment_for_viz, val_segment_for_
             # wandb.log({video_pred_log_title: wandb.Video(video_array_pred, fps = 20, format= 'mp4')})
             # wandb.log({video_gt_log_title: wandb.Video(video_array_gt, fps = 20, format= 'mp4')})
 
+            del video_array_pred
+            del video_array_gt
+
+            gc.collect()
+
         val_st_pt = time.time()
         val_loss = 0.0
 
         printf(">>>>>validating<<<<<<<")
         val_itr = None
-        recurr_input = torch.zeros(1, 512, dtype=torch.float32, device=device, requires_grad=False)
+        recurr_input = torch.zeros(batch_size, 512, dtype=torch.float32, device=device, requires_grad=False)
         for val_itr, val_batch in enumerate(data_loader):
 
             val_stacked_frames, val_plans, val_plans_probs, segments_finished = val_batch
@@ -394,8 +398,8 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr
     batch_size = val_stacked_frames.shape[0]
     seq_len = val_stacked_frames.shape[1]
 
-    desire = torch.zeros(1, 8, dtype=torch.float32, device=device)
-    traffic_convention = torch.zeros(1, 2, dtype=torch.float32, device=device)
+    desire = torch.zeros(batch_size, 8, dtype=torch.float32, device=device)
+    traffic_convention = torch.zeros(batch_size, 2, dtype=torch.float32, device=device)
     traffic_convention[:, 1] = 1
 
     val_input = val_stacked_frames.float().to(device)
@@ -512,7 +516,7 @@ if __name__ == "__main__":
 
     train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_val_split, seq_len=seq_len,
                                  shuffle=True, seed=42)
-    train_segment_for_viz = os.path.dirname(train_dataset.hevc_file_paths[train_dataset.segment_indices[0]])
+    train_segment_for_viz = os.path.dirname(train_dataset.hevc_file_paths[train_dataset.segment_indices[0]]) # '/home/nikita/data/2021-09-14--09-19-21/2'
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor,
                               persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
@@ -521,7 +525,7 @@ if __name__ == "__main__":
 
     val_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_val_split, seq_len=seq_len,
                                validation=True, shuffle=True, seed=42)
-    val_segment_for_viz = os.path.dirname(val_dataset.hevc_file_paths[val_dataset.segment_indices[0]])
+    val_segment_for_viz = os.path.dirname(val_dataset.hevc_file_paths[val_dataset.segment_indices[0]]) # '/home/nikita/data/2021-09-19--10-22-59/18'
     val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor,
                             persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
     val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
@@ -555,7 +559,7 @@ if __name__ == "__main__":
             for epoch in tqdm(range(epochs)):
                 train(comma_model, train_loader, val_loader, optimizer, scheduler,
                       recurr_warmup, epoch, tr_logger, val_logger, log_frequency_steps,
-                      train_segment_for_viz, val_segment_for_viz)
+                      train_segment_for_viz, val_segment_for_viz, batch_size)
 
     result_model_save_path = os.path.join(result_model_dir, train_run_name + '.pth')
     torch.save(comma_model.state_dict(), result_model_save_path)
