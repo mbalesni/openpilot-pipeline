@@ -11,4 +11,4 @@
 #SBATCH --gres=gpu:tesla:1
 #SBATCH --exclude=pegasus,pegasus2
 
-srun python train.py --batch_size 29
+srun python train.py "$@"

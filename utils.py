@@ -45,15 +45,16 @@ def load_h5(seg_path):
     print(os.path.exists(file_path))
     file = h5py.File(file_path,'r')
 
-    plan = file['plans']
-    plan_prob = file['plans_prob']
-    lanelines = file['lanelines']
-    lanelines_prob = file['laneline_probs']
-    road_edg = file['road_edges']
-    road_edg_std = file['road_edge_stds']
+    plan = file['plans'][...]
+    plan_prob = file['plans_prob'][...]
+    lanelines = file['lanelines'][...]
+    lanelines_prob = file['laneline_probs'][...]
+    road_edg = file['road_edges'][...]
+    road_edg_std = file['road_edge_stds'][...]
+
+    file.close()
     
-    
-    return plan, plan_prob, lanelines, lanelines_prob, road_edg, road_edg_std,file
+    return plan, plan_prob, lanelines, lanelines_prob, road_edg, road_edg_std
 
 def extract_gt(plan_gt, plan_prob_gt, lanelines_gt, lanelines_prob_gt, road_edg_gt, road_edg_std_gt, best_plan_only=True):
     
