@@ -279,36 +279,31 @@ def validate(model, data_loader, device, batch_size, desire, traffic_convention,
 
                     batch_vis_img[j] = image
 
-                    video_array[start_indx:end_indx, :, :, :] = batch_vis_img
+                video_array[start_indx:end_indx, :, :, :] = batch_vis_img
+            
+            ## groundtruth_visualization ##
+            video_array_gt = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
+            plan_gt_h5, plan_prob_gt_h5, laneline_gt_h5, laneline_prob_gt_h5, road_edg_gt_h5, road_edgstd_gt_h5 = load_h5(val_video_paths[i])
+
+            for k in range(plan_gt_h5.shape[0]):
                 
-                ## groundtruth_visualization ##
-                video_array_gt = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
+                lane_h5, roadedg_h5, path_h5 = extract_gt(plan_gt_h5[k:k+1], plan_prob_gt_h5[k:k+1], laneline_gt_h5[k:k+1], laneline_prob_gt_h5[k:k+1], road_edg_gt_h5[k:k+1], road_edgstd_gt_h5[k:k+1])[0]
+                image_rgb_gt = rgb_frames[k]
 
-                # plan, plan_prob, lanelines, lanelines_prob, road_edg, road_edg_std,file
-                plan_gt_h5, plan_prob_gt_h5, laneline_gt_h5, laneline_prob_gt_h5, road_edg_gt_h5, road_edgstd_gt_h5, h5_file_object = load_h5(val_video_paths[i])
+                image_gt = visualization(lane_h5, roadedg_h5, path_h5, image_rgb_gt)
+                video_array_gt[k:k+1,:,:,:] = image_gt
 
-                for k in range(plan_gt_h5.shape[0]):
-                    
-                    lane_h5, roadedg_h5, path_h5 = extract_gt(plan_gt_h5[k:k+1], plan_prob_gt_h5[k:k+1], laneline_gt_h5[k:k+1], laneline_prob_gt_h5[k:k+1], road_edg_gt_h5[k:k+1], road_edgstd_gt_h5[k:k+1])[0]
-                    image_rgb_gt = rgb_frames[k]
+            video_array = video_array.transpose(0, 3, 1, 2)
+            video_array_gt = video_array_gt.transpose(0,3,1,2)
+            
+            # TODO: how do we know which one is train/validation?
+            if i == 0:
+                video_pred_log_title = "val_video_trainset"
+                video_gt_log_title = "gt_video_trainset"
+            else:
+                video_pred_log_title = "val_video_valset"
+                video_gt_log_title = "gt_video_valset"
 
-                    image_gt = visualization(lane_h5, roadedg_h5, path_h5, image_rgb_gt)
-                    video_array_gt[k:k+1,:,:,:] = image_gt
-                
-                h5_file_object.close()
-
-                video_array = video_array.transpose(0, 3, 1, 2)
-                video_array_gt = video_array_gt.transpose(0,3,1,2)
-                
-                # TODO: how do we know which one is train/validation?
-                if i == 0:
-                    video_pred_log_title = "val_video_trainset" + str(epoch)
-                    video_gt_log_title = "gt_video_trainset" + str(epoch)
-                else:
-                    video_pred_log_title = "val_video_valset" + str(epoch)
-                    video_gt_log_title = "gt_video_valset" + str(epoch)
-
-            # TODO: remove epoch from the name of the file, wandb will automatically add stepping
             # wandb.log({video_pred_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
             # wandb.log({video_gt_log_title: wandb.Video(video_array_gt, fps = 20, format= 'mp4')})
 
