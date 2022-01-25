@@ -18,6 +18,7 @@ from timing import Timing, pprint_stats
 from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5
 import os
 from model import load_model
+import gc
 
 
 class WandbLogger:
@@ -152,23 +153,24 @@ def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
     path_perhead_loss = path_perhead_loss.sum(dim=1)
 
     plan_loss = path_perhead_loss + path_prob_loss
-
-    # TODO: confirm to add and find the path_prob_loss via kldiv or crossentropy
-    # (@gautam: as tambet suggested us to go with distillation, so in that particular case crossentropy is not valid, we have to go with kldiv. )
     '''
     return plan_loss
 
 
-def train(model, train_loader, val_loader, optimizer, scheduler, desire, traffic_convention, recurr_state, recurr_warmup, epoch, tr_logger, val_logger, log_frequency_steps):
+def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, tr_logger, val_logger, 
+          log_frequency_steps, train_segment_for_viz, val_segment_for_viz, batch_size):
 
-    start_point = time.time()
-    running_loss = 0.0
-
+    recurr_input = torch.zeros(batch_size, 512, dtype=torch.float32, device=device, requires_grad=True)
+    desire = torch.zeros(batch_size, 8, dtype=torch.float32, device=device)
+    traffic_convention = torch.zeros(batch_size, 2, dtype=torch.float32, device=device)
+    traffic_convention[:, 1] = 1
     model.train()
 
+    start_point = time.time()
     batch_load_start = time.time()
-
+    running_loss = 0.0
     timings = dict()
+    segments_finished = True
 
     for tr_it, batch in enumerate(train_loader):
         
@@ -176,16 +178,22 @@ def train(model, train_loader, val_loader, optimizer, scheduler, desire, traffic
         printf(f"> Got new batch: {time.time() - batch_load_start:.2f}s - training iteration i am in ", tr_it)
 
         train_batch_start = time.time()
+        should_backprop = (not recurr_warmup) or (recurr_warmup and not segments_finished)
 
-        stacked_frames, gt_plans, gt_plans_probs, _, _ = batch
+        stacked_frames, gt_plans, gt_plans_probs, segments_finished = batch
+        segments_finished = torch.all(segments_finished)
 
-        should_backprop = not (recurr_warmup and epoch == 0 and tr_it == 0)
         # printf('> Training on batch...')
-        loss = train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire,
-                               traffic_convention, recurr_state, device, timings, should_backprop=should_backprop)
+        loss, recurr_input = train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire,
+                           traffic_convention, recurr_input, device, timings, should_backprop=should_backprop)
         train_batch_time = time.time() - train_batch_start
         fps = batch_size * seq_len / train_batch_time
         printf(f"> Batch trained: {train_batch_time:.2f}s (FPS={fps:.2f}).")
+
+        if segments_finished:
+            # reset the hidden state for new segments
+            printf('Resetting hidden state.')
+            recurr_input = recurr_input.detach().zero_()
 
         running_loss += loss
 
@@ -203,7 +211,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, desire, traffic
             # tr_logger.plotTr( running_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point )  # add get current learning rate adjusted by the scheduler.
 
         if (tr_it + 1) % val_frequency_steps == 0:
-            val_loss, val_time = validate(model, val_loader, device, batch_size, desire, traffic_convention, recurr_state)
+            val_loss, val_time = validate(model, val_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz)
 
             with Timing(timings, 'scheduler_step'):
                     # this should use validation, not training loss. And it should NOT be cumulative loss, it should be *current* loss.
@@ -225,102 +233,100 @@ def train(model, train_loader, val_loader, optimizer, scheduler, desire, traffic
 
     # tr_logger.plotTr(running_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
+    return recurr_input
 
-def validate(model, data_loader, device, batch_size, desire, traffic_convention, recurr_state):
+
+def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz):
+
     model.eval()
     # saving memory by not accumulating activations
     with torch.no_grad():
-
         """
         visualization
         """
         printf("===> visualizing the predictions")
 
-        val_video_paths = ['/gpfs/space/projects/Bolt/comma_recordings/comma2k19/Chunk_1/b0c9d2329ad1606b|2018-08-17--14-55-39/4',
-                           '/gpfs/space/projects/Bolt/comma_recordings/realdata/2021-09-07--08-22-59/14']
+        segments_for_viz = [train_segment_for_viz, val_segment_for_viz]
 
-        # val_video_paths = ['/home/nikita/data/2021-09-07--08-22-59/10',
-        #                    '/home/nikita/data/2021-09-19--10-22-59/15']
+        for i in range(len(segments_for_viz)):
 
-        for i in range(len(val_video_paths)):
+            path_to_segment = segments_for_viz[i]
+            printf(f"===> visualizing the predictions for segment {path_to_segment}")
 
-            input_frames, rgb_frames = load_transformed_video(val_video_paths[i])
+            recurr_input = torch.zeros(1, 512, dtype=torch.float32, device=device, requires_grad=False)
+            desire = torch.zeros(1, 8, dtype=torch.float32, device=device)
+            traffic_convention = torch.zeros(1, 2, dtype=torch.float32, device=device)
+            traffic_convention[:, 1] = 1
 
-            video_array = np.zeros(
-                ((int(np.round(input_frames.shape[0]/batch_size)*batch_size), rgb_frames.shape[1], rgb_frames.shape[2], rgb_frames.shape[3])))
+            input_frames, rgb_frames = load_transformed_video(path_to_segment)
+            input_frames = input_frames.to(device)
 
-            # TODO: @nikebless check the logic of the following loop
-            for itr in range(int(np.round(input_frames.shape[0]/batch_size))):  # ---eg. for batch_size 32 skipping 6 frames for video
+            video_array_pred = np.zeros((rgb_frames.shape[0],rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3]), dtype=np.uint8)
 
-                start_indx, end_indx = itr * batch_size, (itr + 1) * batch_size
-
-                itr_input_frames = input_frames[start_indx:end_indx]
-                itr_rgb_frames = rgb_frames[start_indx:end_indx]
-
-                inputs = {"input_imgs": itr_input_frames.to(device),
-                          "desire": desire,
-                          "traffic_convention": traffic_convention,
-                          'initial_state': recurr_state  # TODO: reinitialize initial state
-                          }
+            for t_idx in range(rgb_frames.shape[0]): 
+                inputs =  {"input_imgs":input_frames[t_idx:t_idx+1],
+                                "desire": desire,
+                                "traffic_convention": traffic_convention,
+                                'initial_state': recurr_input
+                                }
 
                 outs = model(**inputs)
-                preds = outs.detach().cpu().numpy()  # (N,6472)
+                recurr_input = outs[:, 5960:] # refeeding the recurrent state
+                preds = outs.detach().cpu().numpy() #(1,6472)
 
-                batch_vis_img = np.zeros((preds.shape[0], rgb_frames.shape[1], rgb_frames.shape[2], rgb_frames.shape[3]))
+                lanelines, road_edges, best_path = extract_preds(preds)[0]
+                im_rgb = rgb_frames[t_idx] 
+                vis_image = visualization(lanelines,road_edges,best_path, im_rgb)
+                video_array_pred[t_idx:t_idx+1,:,:,:] = vis_image
 
-                for j in range(preds.shape[0]):
+            video_array_gt = np.zeros((rgb_frames.shape[0],rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3]), dtype=np.uint8)
+            plan_gt_h5, plan_prob_gt_h5, laneline_gt_h5, laneline_prob_gt_h5, road_edg_gt_h5, road_edgstd_gt_h5 = load_h5(path_to_segment)
 
-                    pred_it = preds[j][np.newaxis, :]
-                    lanelines, road_edges, best_path = extract_preds(pred_it)[0]
+            for k in range(plan_gt_h5.shape[0]):
 
-                    im_rgb = itr_rgb_frames[j]
+                lane_h5, roadedg_h5, path_h5 = extract_gt(plan_gt_h5[k:k+1], plan_prob_gt_h5[k:k+1], laneline_gt_h5[k:k+1], laneline_prob_gt_h5[k:k+1], road_edg_gt_h5[k:k+1], road_edgstd_gt_h5[k:k+1])[0]
+                image_rgb_gt = rgb_frames[k]
 
-                    image = visualization(lanelines, road_edges, best_path, im_rgb)
+                image_gt = visualization(lane_h5, roadedg_h5, path_h5, image_rgb_gt)
+                video_array_gt[k:k+1,:,:,:] = image_gt
 
-                    batch_vis_img[j] = image
 
-                    video_array[start_indx:end_indx, :, :, :] = batch_vis_img
+            video_array_pred = video_array_pred.transpose(0,3,1,2)
+            video_array_gt = video_array_gt.transpose(0,3,1,2)
                 
-                ## groundtruth_visualization ##
-                video_array_gt = np.zeros(((int(np.round(rgb_frames.shape[0]/batch_size)*batch_size),rgb_frames.shape[1],rgb_frames.shape[2], rgb_frames.shape[3])))
+            if i == 0:
+                video_pred_log_title = "pred_video_trainset"
+                video_gt_log_title = "gt_video_trainset"
+            else:
+                video_pred_log_title = "pred_video_valset"
+                video_gt_log_title = "gt_video_valset"
 
-                # plan, plan_prob, lanelines, lanelines_prob, road_edg, road_edg_std,file
-                plan_gt_h5, plan_prob_gt_h5, laneline_gt_h5, laneline_prob_gt_h5, road_edg_gt_h5, road_edgstd_gt_h5, h5_file_object = load_h5(val_video_paths[i])
-
-                for k in range(plan_gt_h5.shape[0]):
-                    
-                    lane_h5, roadedg_h5, path_h5 = extract_gt(plan_gt_h5[k:k+1], plan_prob_gt_h5[k:k+1], laneline_gt_h5[k:k+1], laneline_prob_gt_h5[k:k+1], road_edg_gt_h5[k:k+1], road_edgstd_gt_h5[k:k+1])[0]
-                    image_rgb_gt = rgb_frames[k]
-
-                    image_gt = visualization(lane_h5, roadedg_h5, path_h5, image_rgb_gt)
-                    video_array_gt[k:k+1,:,:,:] = image_gt
-                
-                h5_file_object.close()
-
-                video_array = video_array.transpose(0, 3, 1, 2)
-                video_array_gt = video_array_gt.transpose(0,3,1,2)
-                
-                # TODO: how do we know which one is train/validation?
-                if i == 0:
-                    video_pred_log_title = "val_video_trainset" + str(epoch)
-                    video_gt_log_title = "gt_video_trainset" + str(epoch)
-                else:
-                    video_pred_log_title = "val_video_valset" + str(epoch)
-                    video_gt_log_title = "gt_video_valset" + str(epoch)
-
-            # TODO: remove epoch from the name of the file, wandb will automatically add stepping
-            # wandb.log({video_pred_log_title: wandb.Video(video_array, fps = 20, format= 'mp4')})
+            # wandb.log({video_pred_log_title: wandb.Video(video_array_pred, fps = 20, format= 'mp4')})
             # wandb.log({video_gt_log_title: wandb.Video(video_array_gt, fps = 20, format= 'mp4')})
+
+            del video_array_pred
+            del video_array_gt
+
+            gc.collect()
 
         val_st_pt = time.time()
         val_loss = 0.0
 
         printf(">>>>>validating<<<<<<<")
         val_itr = None
+        recurr_input = torch.zeros(batch_size, 512, dtype=torch.float32, device=device, requires_grad=False)
         for val_itr, val_batch in enumerate(data_loader):
-            val_stacked_frames, val_plans, val_plans_probs, _, _ = val_batch
-            val_loss = validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, desire, traffic_convention, recurr_state, device)
+
+            val_stacked_frames, val_plans, val_plans_probs, segments_finished = val_batch
+            segments_finished = torch.all(segments_finished)
+
+            val_loss, recurr_input = validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr_input, device)
             val_loss += val_loss
+
+            if segments_finished:
+                # reset the hidden state for new segments
+                printf('Resetting hidden state.')
+                recurr_input.zero_()
 
             if (val_itr+1) % 10 == 0:
                 running_loss = val_loss.item() / (val_itr+1)  # average over entire validation set, no reset as in train
@@ -334,7 +340,7 @@ def validate(model, data_loader, device, batch_size, desire, traffic_convention,
         return val_avg_loss, val_et_pt - val_st_pt
 
 
-def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire, traffic_convention, recurr_state, device, timings, should_backprop=True):
+def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire, traffic_convention, recurr_input, device, timings, should_backprop=True):
     batch_size_empirical = stacked_frames.shape[0]
     seq_len = stacked_frames.shape[1]
 
@@ -351,22 +357,23 @@ def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desi
         inputs_to_pretained_model = {"input_imgs": stacked_frames[:, i, :, :, :],
                                      "desire": desire,
                                      "traffic_convention": traffic_convention,
-                                     'initial_state': recurr_state.clone()  # TODO: why are we cloning recurr_state in 3 places (here, line 428 and line 439?
+                                     'initial_state': recurr_input.clone()  # TODO: why are we cloning recurr_input in 3 places (here, line 428 and line 439?
                                      }
 
         with Timing(timings, 'forward_pass'):
             outputs = model(**inputs_to_pretained_model)  # -- > [32,6472]
 
         plan_predictions = outputs[:, :4955].clone()  # -- > [32,4955]
-        recurr = outputs[:, 5960:].clone()  # -- > [32,512] important to refeed state of GRU
+        recurr_out = outputs[:, 5960:].clone()  # -- > [32,512] important to refeed state of GRU
 
         with Timing(timings, 'path_plan_loss'):
             single_step_loss = path_plan_loss(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :])
 
         if i == seq_len - 1:
+            # final hidden state in sequence, no need to backpropagate it through time
             pass
         else:
-            recurr_state = recurr.clone()
+            recurr_input = recurr_out.clone()
 
         batch_loss += single_step_loss
 
@@ -374,10 +381,9 @@ def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desi
 
     if should_backprop:
         with Timing(timings, 'backward_pass'):
-            complete_batch_loss.backward(retain_graph=False)
+            complete_batch_loss.backward(retain_graph=True)
 
-    recurr_state = recurr
-
+    # TODO: explain why this was thought to be necessary. Check if really necessary.
     with Timing(timings, 'clip_gradients'):
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
 
@@ -385,12 +391,16 @@ def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desi
         optimizer.step()
 
     loss = complete_batch_loss.detach()  # loss for one iteration
-    return loss
+    return loss, recurr_out.detach()
 
 
-def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, desire, traffic_convention, recurr_state, device):
+def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr_input, device):
     batch_size = val_stacked_frames.shape[0]
     seq_len = val_stacked_frames.shape[1]
+
+    desire = torch.zeros(batch_size, 8, dtype=torch.float32, device=device)
+    traffic_convention = torch.zeros(batch_size, 2, dtype=torch.float32, device=device)
+    traffic_convention[:, 1] = 1
 
     val_input = val_stacked_frames.float().to(device)
     val_label_path = val_plans.to(device)
@@ -402,9 +412,10 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, desire
         val_inputs_to_pretained_model = {"input_imgs": val_input[:, i, :, :, :],
                                          "desire": desire,
                                          "traffic_convention": traffic_convention,
-                                         "initial_state": recurr_state}
+                                         "initial_state": recurr_input}
 
         val_outputs = model(**val_inputs_to_pretained_model)  # --> [32,6472]
+        recurr_input = val_outputs[:, 5960:].clone()  # --> [32,512] important to refeed state of GRU
         val_path_prediction = val_outputs[:, :4955].clone()  # --> [32,4955]
 
         single_val_loss = path_plan_loss(
@@ -413,7 +424,7 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, desire
         val_batch_loss += single_val_loss
 
     val_batch_loss = val_batch_loss/batch_size
-    return val_batch_loss.detach()
+    return val_batch_loss.detach(), recurr_input
 
 
 def dir_path(path):
@@ -442,7 +453,7 @@ if __name__ == "__main__":
     print("=>initializing CLI args")
     # CLI parser
     parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
-    parser.add_argument("--batch_size", type=int, default=1, help="batch size")
+    parser.add_argument("--batch_size", type=int, default=28, help="batch size")
     parser.add_argument("--date_it", type=str, required=True, help="run date/name")  # "16Jan_1_seg"
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs")
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
@@ -505,6 +516,7 @@ if __name__ == "__main__":
 
     train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_val_split, seq_len=seq_len,
                                  shuffle=True, seed=42)
+    train_segment_for_viz = os.path.dirname(train_dataset.hevc_file_paths[train_dataset.segment_indices[0]]) # '/home/nikita/data/2021-09-14--09-19-21/2'
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor,
                               persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
@@ -513,6 +525,7 @@ if __name__ == "__main__":
 
     val_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_val_split, seq_len=seq_len,
                                validation=True, shuffle=True, seed=42)
+    val_segment_for_viz = os.path.dirname(val_dataset.hevc_file_paths[val_dataset.segment_indices[0]]) # '/home/nikita/data/2021-09-19--10-22-59/18'
     val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor,
                             persistent_workers=True, collate_fn=None, worker_init_fn=configure_worker)
     val_loader = BatchDataLoader(val_loader, batch_size=batch_size)
@@ -539,22 +552,14 @@ if __name__ == "__main__":
                                                     threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                     cooldown=lrs_cd)
 
-    recurr_state = torch.zeros(batch_size, 512, dtype=torch.float32)
-    recurr_state = recurr_state.to(device).requires_grad_(True)
-
-    desire = torch.zeros(batch_size, 8, dtype=torch.float32)
-    desire = desire.to(device)
-
-    traffic_convention = torch.zeros(batch_size, 2, dtype=torch.float32)
-    traffic_convention[:, 1] = 1
-    traffic_convention = traffic_convention.to(device)
 
     printf("=====> starting to train")
     with torch.autograd.profiler.profile(enabled=False):
         with torch.autograd.profiler.emit_nvtx(enabled=False, record_shapes=False):
             for epoch in tqdm(range(epochs)):
-                train(comma_model, train_loader, val_loader, optimizer, scheduler, desire,
-                    traffic_convention, recurr_state, recurr_warmup, epoch, tr_logger, val_logger, log_frequency_steps)
+                train(comma_model, train_loader, val_loader, optimizer, scheduler,
+                      recurr_warmup, epoch, tr_logger, val_logger, log_frequency_steps,
+                      train_segment_for_viz, val_segment_for_viz, batch_size)
 
     result_model_save_path = os.path.join(result_model_dir, train_run_name + '.pth')
     torch.save(comma_model.state_dict(), result_model_save_path)
