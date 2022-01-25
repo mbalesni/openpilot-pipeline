@@ -334,6 +334,7 @@ class Calibration:
         car_space_projective = np.column_stack((x, y, z)).T
         ep = self.extrinsics_matrix.dot(car_space_projective)
         kep = self.intrinsic.dot(ep)
+        # TODO: fix numerical instability (add 1e-16)
         return (kep[:-1, :] / kep[-1, :]).T
 
     def car_space_to_bb(self, x, y, z):
@@ -401,6 +402,8 @@ def draw_path(lane_lines, road_edges, calib_path, img_plot, calibration, X_IDXS,
     
     # plot_path
     for i in range(1, len(img_pts_l)):
+        if i >= len(img_pts_r): break
+
         u1, v1, u2, v2 = np.append(img_pts_l[i-1], img_pts_r[i-1])
         u3, v3, u4, v4 = np.append(img_pts_l[i], img_pts_r[i])
         pts = np.array([[u1, v1], [u2, v2], [u4, v4], [u3, v3]], np.int32).reshape((-1, 1, 2))
