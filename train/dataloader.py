@@ -246,7 +246,7 @@ class CommaDataset(IterableDataset):
                 gt_plan_seq = segment_gts['plans'][abs_t_indices]
                 gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, worker_id
+                yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, worker_id
 
             segment_gts.close()
             segment_video.release()
@@ -366,9 +366,8 @@ class BatchDataLoader:
         gt_plan = torch.stack([item[1] for item in batch])
         gt_plan_prob = torch.stack([item[2] for item in batch])
         segment_finished = torch.tensor([item[3] for item in batch])
-        sequence_finished = torch.tensor([item[4] for item in batch])
 
-        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
+        return stacked_frames, gt_plan, gt_plan_prob, segment_finished
 
     def __len__(self):
         return len(self.loader)
@@ -461,7 +460,7 @@ if __name__ == "__main__":
         for idx, batch in enumerate(train_loader):
             batch_load_time = time.time() - start_time
 
-            frames, plans, plans_probs, segment_finished, sequence_finished = batch
+            frames, plans, plans_probs, segment_finished = batch
 
             printf(f'{batch_load_time:.2f}s — Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
 
