@@ -446,7 +446,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
     parser.add_argument("--batch_size", type=int, default=28, help="batch size")
     parser.add_argument("--date_it", type=str, required=True, help="run date/name")  # "16Jan_1_seg"
-    parser.add_argument("--epochs", type=int, default=10, help="number of epochs")
+    parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
     parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
     parser.add_argument("--seed", type=int, default=42, help="random seed")

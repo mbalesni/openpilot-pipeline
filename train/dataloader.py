@@ -1,3 +1,10 @@
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, message='Length of IterableDataset')
+warnings.filterwarnings("ignore", category=UserWarning,
+                        message='The given NumPy array is not writeable, and PyTorch does not support non-writeable tensors')
+warnings.filterwarnings("ignore", category=UserWarning, message='Using experimental implementation that allows \'batch_size > 1\'')
+
 import sys
 import numpy as np
 from tqdm import tqdm
