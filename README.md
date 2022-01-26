@@ -60,3 +60,6 @@ Comma AI's Advanced Driver-Assitance System (ADAS) [Openpilot](https://github.co
 - (maybe) loss metrics
 - visualized predictions
 
+## Technical improvement ToDos
+
+- [ ] Do not crash training when a single video failed to read

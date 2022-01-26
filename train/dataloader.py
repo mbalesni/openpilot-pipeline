@@ -210,7 +210,11 @@ class CommaDataset(IterableDataset):
             n_seqs = math.floor(segment_length / self.seq_len)
 
             _, frame2 = segment_video.read()  # initialize last frame
-            yuv_frame2 = bgr_to_yuv(frame2)
+            try:
+                yuv_frame2 = bgr_to_yuv(frame2)
+            except Exception as err:
+                printf('Failed to read segment video:', self.hevc_file_paths[segment_idx])
+                raise err
             
             # TODO: (for further optimization) check if model can handle images pre-processed through (shorter) path2.
             # path1 and path2 look identical when saved to a PNG, but have some 

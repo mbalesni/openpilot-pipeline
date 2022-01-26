@@ -9,6 +9,6 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=60
 #SBATCH --gres=gpu:tesla:1
-#SBATCH --exclude=pegasus,pegasus2
+#SBATCH --exclude=falcon3
 
 srun python train.py "$@"

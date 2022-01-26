@@ -19,6 +19,7 @@ from utils import Calibration, draw_path, printf, extract_preds, extract_gt, loa
 import os
 from model import load_model
 import gc
+import sys
 
 
 class WandbLogger:
@@ -193,7 +194,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
         if segments_finished:
             # reset the hidden state for new segments
             printf('Resetting hidden state.')
-            recurr_input = recurr_input.detach().zero_()
+            recurr_input = recurr_input.zero_().detach()
 
         running_loss += loss
 
@@ -211,7 +212,8 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
             # tr_logger.plotTr( running_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point )  # add get current learning rate adjusted by the scheduler.
 
         if (tr_it + 1) % val_frequency_steps == 0:
-            val_loss, val_time = validate(model, val_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz)
+            visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz)
+            val_loss, val_time = validate(model, val_loader, batch_size, device)
 
             with Timing(timings, 'scheduler_step'):
                     # this should use validation, not training loss. And it should NOT be cumulative loss, it should be *current* loss.
@@ -233,11 +235,8 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
 
     # tr_logger.plotTr(running_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
-    return recurr_input
 
-
-def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz):
-
+def visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz):
     model.eval()
     # saving memory by not accumulating activations
     with torch.no_grad():
@@ -308,6 +307,14 @@ def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_
             del video_array_gt
 
             gc.collect()
+
+
+
+def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz):
+
+    model.eval()
+    # saving memory by not accumulating activations
+    with torch.no_grad():
 
         val_st_pt = time.time()
         val_loss = 0.0
@@ -459,7 +466,7 @@ if __name__ == "__main__":
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
     parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
     parser.add_argument("--seed", type=int, default=42, help="random seed")
-    parser.add_argument("--split", type=float, default=0.98, help="train/val split")
+    parser.add_argument("--split", type=float, default=0.94, help="train/val split")
     parser.add_argument("--val_frequency", type=int, default=400, help="run validation every this many steps")
     args = parser.parse_args()
 
@@ -565,3 +572,4 @@ if __name__ == "__main__":
     torch.save(comma_model.state_dict(), result_model_save_path)
     printf("Saved trained model")
     printf("training_finished")
+    sys.exit(0)
