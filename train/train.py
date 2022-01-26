@@ -22,25 +22,6 @@ import gc
 import sys
 
 
-class WandbLogger:
-    def __init__(self, prefix):
-        self.cur_ep = 0
-        self.prefix = prefix
-
-    def plotTr(self, loss, lr, time, epoch=-1):
-        # TODO: @nikebless look into this logic, looks suspicious.
-        if epoch == -1:
-            self.cur_ep += 1
-        else:
-            self.cur_ep = epoch
-
-        # TODO: log iteration number and epoch
-        wandb.log({"{}_Loss".format(self.prefix): loss,
-                   "{}_Time".format(self.prefix): time,
-                   "{}_lr".format(self.prefix): lr},
-                  step=self.cur_ep)
-
-
 def pprint_seconds(seconds):
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
@@ -158,7 +139,8 @@ def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
     return plan_loss
 
 
-def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, tr_logger, val_logger, 
+# TODO: check order of all args in the script
+def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, 
           log_frequency_steps, train_segment_for_viz, val_segment_for_viz, batch_size):
 
     recurr_input = torch.zeros(batch_size, 512, dtype=torch.float32, device=device, requires_grad=True)
@@ -169,11 +151,14 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
 
     start_point = time.time()
     batch_load_start = time.time()
-    running_loss = 0.0
+    train_loss_accum = 0.0
     timings = dict()
     segments_finished = True
 
     for tr_it, batch in enumerate(train_loader):
+
+        should_log_train = (tr_it+1) % log_frequency_steps == 0
+        should_log_valid = (tr_it+1) % val_frequency_steps == 0
         
         printf()
         printf(f"> Got new batch: {time.time() - batch_load_start:.2f}s - training iteration i am in ", tr_it)
@@ -196,44 +181,46 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
             printf('Resetting hidden state.')
             recurr_input = recurr_input.zero_().detach()
 
-        running_loss += loss
+        train_loss_accum += loss
 
-        if (tr_it+1) % log_frequency_steps == 0:
+        if should_log_train:
             timings['forward_pass']['time'] *= seq_len
             timings['path_plan_loss']['time'] *= seq_len
 
             printf()
-            printf(f'Epoch {epoch+1}/{epochs}. Done {tr_it+1} steps of ~{train_loader_len}. Running loss: {running_loss.item()/log_frequency_steps:.4f}')
+            printf(f'Epoch {epoch+1}/{epochs}. Done {tr_it+1} steps of ~{train_loader_len}. Running loss: {train_loss_accum.item()/log_frequency_steps:.4f}')
             pprint_stats(timings)
             printf()
 
-            timings = dict()
-            running_loss = 0.0
-            # tr_logger.plotTr( running_loss /100, optimizer.param_groups[0]['lr'], time.time() - start_point )  # add get current learning rate adjusted by the scheduler.
+            # TODO: add timings
+            wandb.log({
+                'epoch': epoch,
+                'train_loss': train_loss_accum / log_frequency_steps,
+                'lr': scheduler.get_last_lr(),
+            }, commit=not should_log_valid)
 
-        if (tr_it + 1) % val_frequency_steps == 0:
+            timings = dict()
+            train_loss_accum = 0.0
+
+        if should_log_valid:
             visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz)
             val_loss, val_time = validate(model, val_loader, batch_size, device)
-
-            with Timing(timings, 'scheduler_step'):
-                    # this should use validation, not training loss. And it should NOT be cumulative loss, it should be *current* loss.
-                    # see example in the end here: https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.ReduceLROnPlateau.html#reducelronplateau
-                    scheduler.step(val_loss.item())
+            scheduler.step(val_loss.item())
 
             checkpoint_save_file = 'commaitr' + date_it + str(val_loss) + '_' + str(epoch+1) + ".pth"
             checkpoint_save_path = os.path.join(checkpoints_dir, checkpoint_save_file)
             torch.save(model.state_dict(), checkpoint_save_path)
             model.train()
 
-            # val_logger.plotTr(val_loss, optimizer.param_groups[0]['lr'], val_time)
+            wandb.log({
+                'validation_loss': val_loss,
+            }, commit=True)
 
         batch_load_start = time.time()
 
     printf()
     printf(f"Epoch {epoch+1} done! Took {pprint_seconds(time.time() - start_point)}")
     printf()
-
-    # tr_logger.plotTr(running_loss/(tr_it+1), optimizer.param_groups[0]['lr'], time.time() - start_point )
 
 
 def visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz):
@@ -289,14 +276,14 @@ def visualize_predictions(model, device, train_segment_for_viz, val_segment_for_
             video_array_gt = video_array_gt.transpose(0,3,1,2)
                 
             if i == 0:
-                video_pred_log_title = "pred_video_trainset"
-                video_gt_log_title = "gt_video_trainset"
+                video_pred_log_title = "train_pred_video"
+                video_gt_log_title = "train_gt_video"
             else:
-                video_pred_log_title = "pred_video_valset"
-                video_gt_log_title = "gt_video_valset"
+                video_pred_log_title = "validation_pred_video"
+                video_gt_log_title = "validation_gt_video"
 
-            # wandb.log({video_pred_log_title: wandb.Video(video_array_pred, fps = 20, format= 'mp4')})
-            # wandb.log({video_gt_log_title: wandb.Video(video_array_gt, fps = 20, format= 'mp4')})
+            wandb.log({video_pred_log_title: wandb.Video(video_array_pred, fps = 20, format= 'mp4')}, commit=False)
+            wandb.log({video_gt_log_title: wandb.Video(video_array_gt, fps = 20, format= 'mp4')}, commit=False)
 
             del video_array_pred
             del video_array_gt
@@ -384,7 +371,6 @@ def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desi
         with Timing(timings, 'backward_pass'):
             complete_batch_loss.backward(retain_graph=True)
 
-    # TODO: explain why this was thought to be necessary. Check if really necessary.
     with Timing(timings, 'clip_gradients'):
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
 
@@ -504,9 +490,6 @@ if __name__ == "__main__":
     # only this part of the netwrok is currently trained.
     pathplan_layer_names = ["Gemm_959", "Gemm_981", "Gemm_983", "Gemm_1036"]
 
-    tr_logger = WandbLogger("train")
-    val_logger = WandbLogger("validation")
-
     # wandb init
     # run = wandb.init(project="test-project", entity="openpilot_project", train_run_name = train_run_name, reinit= True, tags= ["supercombbo pretrain"])
 
@@ -559,7 +542,7 @@ if __name__ == "__main__":
         with torch.autograd.profiler.emit_nvtx(enabled=False, record_shapes=False):
             for epoch in tqdm(range(epochs)):
                 train(comma_model, train_loader, val_loader, optimizer, scheduler,
-                      recurr_warmup, epoch, tr_logger, val_logger, log_frequency_steps,
+                      recurr_warmup, epoch, log_frequency_steps,
                       train_segment_for_viz, val_segment_for_viz, batch_size)
 
     result_model_save_path = os.path.join(result_model_dir, train_run_name + '.pth')
