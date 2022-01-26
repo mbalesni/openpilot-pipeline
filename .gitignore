@@ -2,3 +2,5 @@
 outs
 __pycache__
 .DS_Store
+train/nets
+core.*
