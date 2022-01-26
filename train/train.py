@@ -14,12 +14,15 @@ import torch.optim as topt
 from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video, configure_worker
 from torch.utils.data import DataLoader
 import wandb
-from timing import Timing, pprint_stats
+from timing import Timing, MultiTiming, pprint_stats
 from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5
 import os
 from model import load_model
 import gc
 import sys
+import dotenv
+
+dotenv.load_dotenv()
 
 
 def pprint_seconds(seconds):
@@ -46,11 +49,7 @@ def visualization(lanelines, roadedges, calib_path, im_rgb):
     laneline_colors = [(255, 0, 0), (0, 255, 0), (255, 0, 255), (0, 255, 255)]
     vis_image = draw_path(lanelines, roadedges, calib_path[0, :, :3], im_rgb, calibration_pred, X_IDXs, laneline_colors)
 
-#     print(vis_image.shape)
     return vis_image
-
-# Loss functions:
-
 
 def mean_std(array):
 
@@ -139,7 +138,6 @@ def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
     return plan_loss
 
 
-# TODO: check order of all args in the script
 def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, 
           log_frequency_steps, train_segment_for_viz, val_segment_for_viz, batch_size):
 
@@ -149,30 +147,33 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
     traffic_convention[:, 1] = 1
     model.train()
 
-    start_point = time.time()
-    batch_load_start = time.time()
     train_loss_accum = 0.0
-    timings = dict()
     segments_finished = True
 
+    start_point = time.time()
+    timings = dict()
+    multitimings = MultiTiming(timings)
+    multitimings.start('batch_load')
+
     for tr_it, batch in enumerate(train_loader):
+        batch_load_time = multitimings.end('batch_load')
 
         should_log_train = (tr_it+1) % log_frequency_steps == 0
-        should_log_valid = (tr_it+1) % val_frequency_steps == 0
+        should_run_valid = (tr_it+1) % val_frequency_steps == 0
         
         printf()
-        printf(f"> Got new batch: {time.time() - batch_load_start:.2f}s - training iteration i am in ", tr_it)
+        printf(f"> Got new batch: {batch_load_time:.2f}s - training iteration i am in ", tr_it)
+        multitimings.start('train_batch')
 
-        train_batch_start = time.time()
         should_backprop = (not recurr_warmup) or (recurr_warmup and not segments_finished)
 
         stacked_frames, gt_plans, gt_plans_probs, segments_finished = batch
         segments_finished = torch.all(segments_finished)
 
-        # printf('> Training on batch...')
         loss, recurr_input = train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire,
                            traffic_convention, recurr_input, device, timings, should_backprop=should_backprop)
-        train_batch_time = time.time() - train_batch_start
+
+        train_batch_time = multitimings.end('train_batch')
         fps = batch_size * seq_len / train_batch_time
         printf(f"> Batch trained: {train_batch_time:.2f}s (FPS={fps:.2f}).")
 
@@ -183,28 +184,12 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
 
         train_loss_accum += loss
 
-        if should_log_train:
-            timings['forward_pass']['time'] *= seq_len
-            timings['path_plan_loss']['time'] *= seq_len
+        if should_run_valid:
+            with Timing(timings, 'visualize_preds'):
+                visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz)
+            with Timing(timings, 'validate'):
+                val_loss = validate(model, val_loader, batch_size, device)
 
-            printf()
-            printf(f'Epoch {epoch+1}/{epochs}. Done {tr_it+1} steps of ~{train_loader_len}. Running loss: {train_loss_accum.item()/log_frequency_steps:.4f}')
-            pprint_stats(timings)
-            printf()
-
-            # TODO: add timings
-            wandb.log({
-                'epoch': epoch,
-                'train_loss': train_loss_accum / log_frequency_steps,
-                'lr': scheduler.get_last_lr(),
-            }, commit=not should_log_valid)
-
-            timings = dict()
-            train_loss_accum = 0.0
-
-        if should_log_valid:
-            visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz)
-            val_loss, val_time = validate(model, val_loader, batch_size, device)
             scheduler.step(val_loss.item())
 
             checkpoint_save_file = 'commaitr' + date_it + str(val_loss) + '_' + str(epoch+1) + ".pth"
@@ -214,9 +199,30 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
 
             wandb.log({
                 'validation_loss': val_loss,
+            }, commit=False)
+
+        if should_log_train:
+            timings['forward_pass']['time'] *= seq_len
+            timings['path_plan_loss']['time'] *= seq_len
+            
+            running_loss = train_loss_accum.item() / log_frequency_steps
+
+            printf()
+            printf(f'Epoch {epoch+1}/{epochs}. Done {tr_it+1} steps of ~{train_loader_len}. Running loss: {running_loss:.4f}')
+            pprint_stats(timings)
+            printf()
+
+            wandb.log({
+                'epoch': epoch,
+                'train_loss': running_loss,
+                'lr': scheduler.optimizer.param_groups[0]['lr'],
+                **{f'time_{k}': v['time'] / v['count'] for k, v in timings.items()}
             }, commit=True)
 
-        batch_load_start = time.time()
+            timings = dict()
+            train_loss_accum = 0.0
+
+        multitimings.start('batch_load')
 
     printf()
     printf(f"Epoch {epoch+1} done! Took {pprint_seconds(time.time() - start_point)}")
@@ -232,7 +238,7 @@ def visualize_predictions(model, device, train_segment_for_viz, val_segment_for_
         for i in range(len(segments_for_viz)):
 
             path_to_segment = segments_for_viz[i]
-            printf(f"===> visualizing the predictions for segment {path_to_segment}")
+            printf(f"===>Visualizing predictions: {path_to_segment}")
 
             recurr_input = torch.zeros(1, 512, dtype=torch.float32, device=device, requires_grad=False)
             desire = torch.zeros(1, 8, dtype=torch.float32, device=device)
@@ -297,7 +303,6 @@ def validate(model, data_loader, batch_size, device):
     # saving memory by not accumulating activations
     with torch.no_grad():
 
-        val_st_pt = time.time()
         val_loss = 0.0
 
         printf(">>>>>validating<<<<<<<")
@@ -322,10 +327,9 @@ def validate(model, data_loader, batch_size, device):
 
         if val_itr is not None:
             val_avg_loss = val_loss/(val_itr+1)
-            val_et_pt = time.time()
             printf(f"Validation Loss: {val_avg_loss:.4f}")
 
-        return val_avg_loss, val_et_pt - val_st_pt
+        return val_avg_loss
 
 
 def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire, traffic_convention, recurr_input, device, timings, should_backprop=True):
@@ -410,7 +414,7 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr
 
         val_batch_loss += single_val_loss
 
-    val_batch_loss = val_batch_loss/batch_size
+    val_batch_loss = val_batch_loss / seq_len / batch_size
     return val_batch_loss.detach(), recurr_input
 
 
@@ -430,14 +434,14 @@ if __name__ == "__main__":
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
-    print("=> using '{}' for computation.".format(device))
+    print("=>Using '{}' for computation.".format(device))
 
 
     # NOTE: important for data loader
     torch.multiprocessing.set_start_method('spawn')
     torch.autograd.set_detect_anomaly(False)
 
-    print("=>initializing CLI args")
+    print("=>Initializing CLI args")
     # CLI parser
     parser = argparse.ArgumentParser(description='Args for comma supercombo train pipeline')
     parser.add_argument("--batch_size", type=int, default=28, help="batch size")
@@ -448,18 +452,23 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="random seed")
     parser.add_argument("--split", type=float, default=0.94, help="train/val split")
     parser.add_argument("--val_frequency", type=int, default=400, help="run validation every this many steps")
+    parser.add_argument("--lr", type=int, default=0.001, help="learning rate")
+    parser.add_argument("--recurr_warmup", type= bool, default=True, help="recurrent hidden state")
+    parser.add_argument("--l2_lambda", type=int, default=1e-4, help="weight decay rate")
+    parser.add_argument("--lrs_thresh", type=int, default=1e-4, help="lrs threshold")
+    parser.add_argument("--lrs_min", type=int, default=1e-6, help="lrs min")
+    parser.add_argument("--lrs_factor", type=int, default=0.75, help="lrs factor")
+    parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
+    parser.add_argument("--seq_len", type=int, default=100, help="sequence length")
+    parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
     args = parser.parse_args()
-
+ 
     # for reproducibility
     torch.manual_seed(args.seed)
-    print("=>seed={}".format(args.seed))
-
-    printf("=>intializing hyperparams")
 
     date_it = args.date_it
-    train_run_name = "onnx_gen_gt_comma_pipeline_" + date_it
+    train_run_name = date_it
     comma_recordings_basedir = args.recordings_basedir
-    # comma_recordings_basedir = "/home/nikita/data"
     path_to_supercombo = '../common/models/supercombo.onnx'
 
     checkpoints_dir = './nets/checkpoints'
@@ -468,30 +477,29 @@ if __name__ == "__main__":
     os.makedirs(result_model_dir, exist_ok=True)
 
     # Hyperparams
-    # TODO: move these to CLI + Wandb
-    lr = 0.001
-    recurr_warmup = True
-    l2_lambda = 1e-4
-    lrs_factor = 0.75
-    lrs_patience = 3
-    lrs_cd = 0
-    lrs_thresh = 1e-4
-    lrs_min = 1e-6
-    seq_len = 100
-    prefetch_factor = 2
-
-    epochs = args.epochs
-    log_frequency_steps = args.log_frequency
-    val_frequency_steps = args.val_frequency
     batch_size = num_workers = args.batch_size  # MUST BE batch_size == num_workers
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
+
+    epochs = args.epochs
+    l2_lambda = args.l2_lambda
+    log_frequency_steps = args.log_frequency
+    lr = args.lr
+    lrs_cd = 0
+    lrs_factor = args.lrs_factor
+    lrs_min = args.lrs_min
+    lrs_patience = args.lrs_patience
+    lrs_thresh = args.lrs_thresh
+    prefetch_factor = 2
+    recurr_warmup = args.recurr_warmup
+    seq_len = args.seq_len
     train_val_split = args.split
+    val_frequency_steps = args.val_frequency
 
     # only this part of the netwrok is currently trained.
     pathplan_layer_names = ["Gemm_959", "Gemm_981", "Gemm_983", "Gemm_1036"]
 
     # wandb init
-    # run = wandb.init(project="test-project", entity="openpilot_project", train_run_name = train_run_name, reinit= True, tags= ["supercombbo pretrain"])
+    run = wandb.init(entity=os.environ['WANDB_ENTITY'], project=os.environ['WANDB_PROJECT'], name=train_run_name, mode='offline' if args.no_wandb else 'online')
 
     # Load data and split in test and train
     printf("=>Loading data")
@@ -523,12 +531,7 @@ if __name__ == "__main__":
     comma_model = load_model(path_to_supercombo, trainable_layers=pathplan_layer_names)
     comma_model = comma_model.to(device)
 
-    # wandb.watch(comma_model) # Log the network weight histograms
-    # with run:
-    #     wandb.config.l2 = l2_lambda
-    #     wandb.config.lrs = str(scheduler)
-    #     wandb.config.lr = lr
-    #     wandb.config.batch_size = batch_size
+    wandb.watch(comma_model) # Log the gradients  
 
     param_group = comma_model.parameters()
     optimizer = topt.Adam(param_group, lr, weight_decay=l2_lambda)
@@ -536,17 +539,24 @@ if __name__ == "__main__":
                                                     threshold=lrs_thresh, verbose=True, min_lr=lrs_min,
                                                     cooldown=lrs_cd)
 
+    with run:
+        printf("=>Run parameters: \n")
+        for arg in vars(args):
+            wandb.config.update({arg: getattr(args, arg)})
+            printf(arg, getattr(args, arg))
+        printf()
 
-    printf("=====> starting to train")
-    with torch.autograd.profiler.profile(enabled=False):
-        with torch.autograd.profiler.emit_nvtx(enabled=False, record_shapes=False):
-            for epoch in tqdm(range(epochs)):
-                train(comma_model, train_loader, val_loader, optimizer, scheduler,
-                      recurr_warmup, epoch, log_frequency_steps,
-                      train_segment_for_viz, val_segment_for_viz, batch_size)
+        printf("=====>Starting to train")
+        with torch.autograd.profiler.profile(enabled=False):
+            with torch.autograd.profiler.emit_nvtx(enabled=False, record_shapes=False):
+                for epoch in tqdm(range(epochs)):
+                    train(comma_model, train_loader, val_loader, optimizer, scheduler,
+                        recurr_warmup, epoch, log_frequency_steps,
+                        train_segment_for_viz, val_segment_for_viz, batch_size)
 
-    result_model_save_path = os.path.join(result_model_dir, train_run_name + '.pth')
-    torch.save(comma_model.state_dict(), result_model_save_path)
-    printf("Saved trained model")
-    printf("training_finished")
+        result_model_save_path = os.path.join(result_model_dir, train_run_name + '.pth')
+        torch.save(comma_model.state_dict(), result_model_save_path)
+        printf("Saved trained model")
+        printf("training_finished")
+
     sys.exit(0)
