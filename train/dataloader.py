@@ -376,6 +376,7 @@ class BatchDataLoader:
 class BackgroundGenerator(multiprocessing.Process):
     def __init__(self, generator):
         super(BackgroundGenerator, self).__init__() 
+        # TODO: use prefetch factor instead of harcoded value
         self.queue = torch.multiprocessing.Queue(2)
         self.generator = generator
         self.start()
