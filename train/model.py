@@ -7,7 +7,7 @@ def reinitialize_weights(layer_weight):
     torch.nn.init.xavier_uniform_(layer_weight)
 
 
-def load_model(path_to_supercombo, trainable_layers):
+def load_model(path_to_supercombo, trainable_layers=[]):
 
     onnx_model = onnx.load(path_to_supercombo)
     model = ConvertModel(onnx_model, experimental=True)  # pretrained_model
