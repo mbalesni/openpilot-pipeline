@@ -237,15 +237,10 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
 
 
 def visualize_predictions(model, device, train_segment_for_viz, val_segment_for_viz):
-    model.eval()
-    # saving memory by not accumulating activations
-    with torch.no_grad():
-        """
-        visualization
-        """
-        printf("===> visualizing the predictions")
+    segments_for_viz = [train_segment_for_viz, val_segment_for_viz]
 
-        segments_for_viz = [train_segment_for_viz, val_segment_for_viz]
+    model.eval()
+    with torch.no_grad():
 
         for i in range(len(segments_for_viz)):
 
@@ -309,8 +304,7 @@ def visualize_predictions(model, device, train_segment_for_viz, val_segment_for_
             gc.collect()
 
 
-
-def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_segment_for_viz):
+def validate(model, data_loader, batch_size, device):
 
     model.eval()
     # saving memory by not accumulating activations
@@ -327,8 +321,8 @@ def validate(model, data_loader, batch_size, device, train_segment_for_viz, val_
             val_stacked_frames, val_plans, val_plans_probs, segments_finished = val_batch
             segments_finished = torch.all(segments_finished)
 
-            val_loss, recurr_input = validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr_input, device)
-            val_loss += val_loss
+            batch_loss, recurr_input = validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr_input, device)
+            val_loss += batch_loss
 
             if segments_finished:
                 # reset the hidden state for new segments
