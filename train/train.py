@@ -481,8 +481,8 @@ if __name__ == "__main__":
     os.makedirs(result_model_dir, exist_ok=True)
 
     # Hyperparams
+    # TODO: move these to CLI + Wandb
     lr = 0.001
-    diff_lr = False
     recurr_warmup = True
     l2_lambda = 1e-4
     lrs_factor = 0.75
@@ -490,6 +490,8 @@ if __name__ == "__main__":
     lrs_cd = 0
     lrs_thresh = 1e-4
     lrs_min = 1e-6
+    seq_len = 100
+    prefetch_factor = 2
 
     epochs = args.epochs
     log_frequency_steps = args.log_frequency
@@ -497,8 +499,6 @@ if __name__ == "__main__":
     batch_size = num_workers = args.batch_size  # MUST BE batch_size == num_workers
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
     train_val_split = args.split
-    prefetch_factor = 2
-    seq_len = 100
 
     # only this part of the netwrok is currently trained.
     pathplan_layer_names = ["Gemm_959", "Gemm_981", "Gemm_983", "Gemm_1036"]
