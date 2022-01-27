@@ -133,7 +133,7 @@ The output vector is parsed according to index and the outputs can be obtained. 
 
 0. Save model in ONNX
 1. In simulation (Carla)
-2. In the Comma device — Convert to DLC @rabdumalikov
+2. In the Comma device — [Convert to DLC](doc/ONNX_to_DLC.md) @rabdumalikov
 
 ## Our Results @gauti
 
