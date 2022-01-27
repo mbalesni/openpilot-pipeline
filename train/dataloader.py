@@ -107,13 +107,13 @@ def parse_affinity(cmd_output):
 
 
 def set_affinity(pid, cpu_list):
-    cmd = 'taskset -pc {} {}'.format(','.join(map(str, cpu_list)), pid)
-    subprocess.check_output(cmd, shell=True)
+    cmd = ['taskset', '-pc', ','.join(map(str, cpu_list)), str(pid)]
+    subprocess.check_output(cmd, shell=False)
 
 
 def get_affinity(pid):
-    cmd = 'taskset -pc {}'.format(pid)
-    output = subprocess.check_output(cmd, shell=True)
+    cmd = ['taskset', '-pc',  str(pid)]
+    output = subprocess.check_output(cmd, shell=False)
     return parse_affinity(output)
 
 
@@ -233,7 +233,7 @@ class CommaDataset(IterableDataset):
             # path2 = bgr_to_rgb(frame2)
             # printf('diff between paths:', list((path1 - path2).flatten()))
 
-            for sequence_idx in range(n_seqs):
+            for sequence_idx in range(n_seqs): # with seq_len=200 this should run even fewer iterations than usual, so wtf?
 
                 segment_finished = sequence_idx == n_seqs-1
 
@@ -243,7 +243,11 @@ class CommaDataset(IterableDataset):
                 # start iteration from 1 because we already read 1 frame before
                 for t_idx in range(1, self.seq_len + 1):
                     _, frame2 = segment_video.read()
-                    yuv_frame2 = bgr_to_yuv(frame2)
+                    try:
+                        yuv_frame2 = bgr_to_yuv(frame2)
+                    except Exception as err:
+                        printf(f'Failed to read frame {sequence_idx*seq_len + t_idx} of segment:', self.hevc_file_paths[segment_idx])
+                        raise err
                     yuv_frame_seq[t_idx] = yuv_frame2
 
                 prepared_frames = transform_frames(yuv_frame_seq)

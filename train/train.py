@@ -21,6 +21,7 @@ from model import load_model
 import gc
 import sys
 import dotenv
+import shutil
 
 dotenv.load_dotenv()
 
@@ -453,7 +454,8 @@ if __name__ == "__main__":
     parser.add_argument("--split", type=float, default=0.94, help="train/val split")
     parser.add_argument("--val_frequency", type=int, default=400, help="run validation every this many steps")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-    parser.add_argument("--recurr_warmup", type=bool, default=True, help="recurrent hidden state")
+    parser.add_argument('--recurr_warmup', dest='recurr_warmup', action='store_true')
+    parser.add_argument('--no_recurr_warmup', dest='recurr_warmup', action='store_false')
     parser.add_argument("--l2_lambda", type=float, default=1e-4, help="weight decay rate")
     parser.add_argument("--lrs_thresh", type=float, default=1e-4, help="lrs threshold")
     parser.add_argument("--lrs_min", type=float, default=1e-6, help="lrs min")
@@ -461,6 +463,7 @@ if __name__ == "__main__":
     parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
     parser.add_argument("--seq_len", type=int, default=100, help="sequence length")
     parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
+    parser.set_defaults(recurr_warmup=True)
     args = parser.parse_args()
  
     # for reproducibility
@@ -524,8 +527,18 @@ if __name__ == "__main__":
     val_loader_len = len(val_loader)
     val_loader = BackgroundGenerator(val_loader)
 
-    print('Batches in train_loader:', train_loader_len)
-    print('Batches in val_loader:', val_loader_len)
+    printf('Train visualization segment:', train_segment_for_viz)
+    printf('Validation visualization segment:', val_segment_for_viz)
+
+    os.makedirs('tmp', exist_ok=True)
+    shutil.copytree(train_segment_for_viz, 'tmp/train_segment_for_viz')
+    shutil.copytree(val_segment_for_viz, 'tmp/val_segment_for_viz')
+    train_segment_for_viz = 'tmp/train_segment_for_viz'
+    val_segment_for_viz = 'tmp/val_segment_for_viz'
+
+
+    printf('Batches in train_loader:', train_loader_len)
+    printf('Batches in val_loader:', val_loader_len)
 
     printf("=>Loading the model")
     comma_model = load_model(path_to_supercombo, trainable_layers=pathplan_layer_names)
