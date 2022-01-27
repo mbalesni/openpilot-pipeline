@@ -5,7 +5,7 @@
 https://developer.qualcomm.com/software/qualcomm-neural-processing-sdk/getting-started
 
 I had a lot of problems when I tried to follow to the official instruction. 
-But here I outline the instruction that works. 
+Thus I outlined alternative instructions that works. 
 
 ## Prerequisites
 * install Ubuntu [18.04](https://releases.ubuntu.com/18.04/ubuntu-18.04.6-desktop-amd64.iso)
