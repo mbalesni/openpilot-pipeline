@@ -94,8 +94,7 @@ def generate_ground_truth(path_to_segment, model, force=False):
 
 
 if __name__ == '__main__':
-    data_dir = '/gpfs/space/projects/Bolt/comma_recordings'
-    # data_dir = '/home/nikita/data'
+    data_dir = sys.argv[1]
 
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path_to_model = os.path.join(parent_dir, 'common/models/supercombo.onnx')

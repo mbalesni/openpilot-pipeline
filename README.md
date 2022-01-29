@@ -4,8 +4,13 @@
 
 This repo attempts to re-create the full data & training pipeline to allow training custom driving models for Openpilot.
 
-## About @nikebless
-- where this project is right now? (distillation only, no true training)
+## About
+
+The project is *in early development*. The ultimate goal is to create a codebase for training end-to-end autonomous driving models.
+
+The only implemented feature right now is distillation of path planning *from the original Openpilot driving model*. To train from scratch, we need to implement creation of accurate ground truth paths by processing data from cars' GNSS, IMU and visual odometry with [laika](https://github.com/commaai/laika) and [rednose](https://github.com/commaai/rednose) (PRs welcome!).
+
+Below we describe the implemented parts of the pipeline and current training results.
 
 ## Model
 The neural network architecurre of the model consists of a Convolutional feature extractor which is a Resnet based custom feature extractor, followed by a GRU (used to capture the temporal context) and at the end we have different outputs heads which comprises of fully connnected layers responisble for outputs like paths, lanelines road edges and other meta information which is explained in detail below. 
@@ -79,7 +84,9 @@ The output vector is parsed according to index and the outputs can be obtained. 
 * ##### Recurrent State
 
 
-### Technicalities: onnx2pytorch @nikebless
+### Converting the model from ONNX to PyTorch
+
+To not have to recreate the Openpilot model from scratch, we convert it from the ONNX format to PyTorch using [onnx2pytorch](https://github.com/ToriML/onnx2pytorch). Note: there is a bug in onnx2pytorch which makes it not work with openpilot's model; follow this [PR](https://github.com/ToriML/onnx2pytorch/pull/38) to fix it.
 
 ### Loss functions
 - As mentioned above we are doing model distillation and currently training for just paths. All the predictions are in the terms of mean, standard deviation and logits. So we are first creating distribution [objects](https://pytorch.org/docs/1.7.1/distributions.html) and then calculating KL divergence for those distribution objects. 
@@ -88,9 +95,18 @@ The output vector is parsed according to index and the outputs can be obtained. 
 
 - If we try to train for more than one task, the total loss can be calculated by summing all the losses for the tasks or task-loss balancing strategies can be implemeneted for refine results.  
 
-## Data pipeline @nikebless
-- gt_hacky — distilling existing model
-- gt_real (not finished yet)
+## Data pipeline
+
+For knowledge distillation, we run the official Openpilot model on the full dataset and save the outputs. This is done by `gt_hacky`.
+
+Real ground truth creation is currently not implemented.
+
+For the dataset, we use [comma2k19](https://github.com/commaai/comma2k19), a 33-hour driving dataset made by CommaAI: 
+
+> The data was collected using comma EONs that has sensors similar to those of any modern smartphone including a road-facing camera, phone GPS, thermometers and 9-axis IMU. Additionally, the EON captures raw GNSS measurements and all CAN data sent by the car."
+
+To use your own data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future when true ground truth creation is implemented, you *might* be able to use a different device, but you'll need to adjust some of the hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc).
+
 
 ## Training pipeline
 

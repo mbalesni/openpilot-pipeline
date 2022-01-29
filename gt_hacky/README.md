@@ -1,28 +1,14 @@
-Return the ground-truth for a road segment.
+# Creating ground truths for Distillation
 
-## USAGE 1
+Create ground truth predictions by running an existing model on driving data in the comma2k19 format.
 
-**Script:** start.sh
+## Usage
 
-**Input:** fcamera.hvec
+```bash
+python generate_gt.py /path/to/segments
+```
 
-**Output:** marker_and_leads_ground_truth.npz
+Generates ground truth files in-place for all nested folders under <path_to_segments> that contain files `fcamera.hevc` or `video.hevc`.
 
-**Output format:** [ plan: [...], lanelines: [...], leads: [...], ..., pose: [...] ]
-
-**Example:** ./start.sh fcamera.hvec
-
-## USAGE 2
-
-**Script:** generate_gt.py
-
-**Description:** generate ground truth in-place for all the folders in '/data/realdata/aba20ae4' which contains 'fcamera.hevc'.
-
-**Example:** python generate_gt.py
-
-## INSTALL 
-
-You can use install.sh script and if it won't work try to invoke all the commands
-from this file one by one.
 
 
