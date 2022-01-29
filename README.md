@@ -1,6 +1,8 @@
 # openpilot-pipeline
 
-Comma AI's Advanced Driver-Assitance System (ADAS) [Openpilot](https://github.com/commaai/openpilot) is open-source, but the code to create training data and train the models is not. We attempt to re-create & open-source their full pipeline.
+[Openpilot](https://github.com/commaai/openpilot) is the currently leading[^1] Advanced Driver-Assitance System (ADAS), developed & open-sourced by [Comma AI](https://comma.ai/).
+
+This repo attempts to re-create the full data & training pipeline to allow training custom driving models for Openpilot.
 
 ## About @nikebless
 - where this project is right now? (distillation only, no true training)
@@ -200,3 +202,6 @@ The only required parameter are `--date_it` and `--recordings_basedir`, by runni
 ## Technical improvement ToDos
 
 - [ ] Do not crash training when a single video failed to read
+
+
+[^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
