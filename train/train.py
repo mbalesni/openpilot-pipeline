@@ -85,7 +85,7 @@ def path_kl_div_loss(mean1, mean2, std1, std2):
     return loss
 
 
-def plan_distill_loss(plan_pred, plan_gt, plan_prob_gt):
+def plan_distill_loss(plan_pred, plan_gt, plan_prob_gt, device):
 
     paths = plan_pred.reshape(-1, 5, 991)
     path1_pred = paths[:, 0, :-1].reshape(-1, 2, 33, 15)
@@ -400,7 +400,8 @@ def train_batch(run, model, optimizer, stacked_frames, gt_plans, gt_plans_probs,
         recurr_out = outputs[:, 5960:].clone()  # -- > [32,512] important to refeed state of GRU
 
         with Timing(timings, 'path_plan_loss'):
-            single_step_loss = plan_mhp_loss(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :], device)
+            loss_func = plan_distill_loss if run.config.distill else plan_mhp_loss
+            single_step_loss = loss_func(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :], device)
 
         if i == seq_len - 1:
             # final hidden state in sequence, no need to backpropagate it through time
@@ -450,7 +451,8 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr
         recurr_input = val_outputs[:, 5960:].clone()  # --> [32,512] important to refeed state of GRU
         val_path_prediction = val_outputs[:, :4955].clone()  # --> [32,4955]
 
-        single_val_loss = plan_mhp_loss(
+        loss_func = plan_distill_loss if run.config.distill else plan_mhp_loss
+        single_val_loss = loss_func(
             val_path_prediction, val_label_path[:, i, :, :, :, :], val_label_path_prob[:, i, :], device)
 
         val_batch_loss += single_val_loss
@@ -489,22 +491,24 @@ if __name__ == "__main__":
     parser.add_argument("--date_it", type=str, required=True, help="run date/name")  # "16Jan_1_seg"
     parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="gradient clip norm")
+    parser.add_argument("--l2_lambda", type=float, default=1e-4, help="weight decay rate")
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
+    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
+    parser.add_argument("--lrs_factor", type=float, default=0.75, help="lrs factor")
+    parser.add_argument("--lrs_min", type=float, default=1e-6, help="lrs min")
+    parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
+    parser.add_argument("--lrs_thresh", type=float, default=1e-4, help="lrs threshold")
+    parser.add_argument("--mhp_loss", dest='distill', help="use Laplacian MHP loss instead of distillation", action='store false')  # "16Jan_1_seg"
+    parser.add_argument("--no_recurr_warmup", dest='recurr_warmup', action='store_false')
+    parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
     parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
+    parser.add_argument("--recurr_warmup", dest='recurr_warmup', action='store_true')
     parser.add_argument("--seed", type=int, default=42, help="random seed")
+    parser.add_argument("--seq_len", type=int, default=100, help="sequence length")
     parser.add_argument("--split", type=float, default=0.94, help="train/val split")
     parser.add_argument("--val_frequency", type=int, default=400, help="run validation every this many steps")
-    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-    parser.add_argument('--recurr_warmup', dest='recurr_warmup', action='store_true')
-    parser.add_argument('--no_recurr_warmup', dest='recurr_warmup', action='store_false')
-    parser.add_argument("--l2_lambda", type=float, default=1e-4, help="weight decay rate")
-    parser.add_argument("--lrs_thresh", type=float, default=1e-4, help="lrs threshold")
-    parser.add_argument("--lrs_min", type=float, default=1e-6, help="lrs min")
-    parser.add_argument("--lrs_factor", type=float, default=0.75, help="lrs factor")
-    parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
-    parser.add_argument("--seq_len", type=int, default=100, help="sequence length")
-    parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
     parser.set_defaults(recurr_warmup=True)
+    parser.set_defaults(distill=True)
     args = parser.parse_args()
  
     # for reproducibility
