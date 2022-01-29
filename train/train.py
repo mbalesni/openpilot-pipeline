@@ -11,6 +11,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.optim as topt
+from torch.nn import CrossEntropyLoss
 from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video, configure_worker
 from torch.utils.data import DataLoader
 import wandb
@@ -70,7 +71,7 @@ def path_laplacian_nll_loss(mean_true, mean_pred, sigma, sigma_clamp: float = 1e
     sigma_min = torch.clamp(sigma, min=math.log(sigma_clamp))
     sigma_max = torch.max(sigma, torch.log(1e-6 + err/loss_clamp))
     nll = err * torch.exp(-sigma_max) + sigma_min
-    return nll
+    return nll.sum(dim=(1,2))
 
 
 def path_kl_div_loss(mean1, mean2, std1, std2):
@@ -84,8 +85,7 @@ def path_kl_div_loss(mean1, mean2, std1, std2):
     return loss
 
 
-# TODO: vectorize for speedup?
-def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
+def plan_distill_loss(plan_pred, plan_gt, plan_prob_gt):
 
     paths = plan_pred.reshape(-1, 5, 991)
     path1_pred = paths[:, 0, :-1].reshape(-1, 2, 33, 15)
@@ -116,29 +116,64 @@ def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
     mean_pred_path5, std_pred_path5 = mean_std(path5_pred)
     mean_gt_path5, std_gt_path5 = mean_std(path5_gt)
 
-    path1_loss = path_laplacian_nll_loss(mean_gt_path1, mean_pred_path1, std_pred_path1)
-    path2_loss = path_laplacian_nll_loss(mean_gt_path2, mean_pred_path2, std_pred_path2)
-    path3_loss = path_laplacian_nll_loss(mean_gt_path3, mean_pred_path3, std_pred_path3)
-    path4_loss = path_laplacian_nll_loss(mean_gt_path4, mean_pred_path4, std_pred_path4)
-    path5_loss = path_laplacian_nll_loss(mean_gt_path5, mean_pred_path5, std_pred_path5)
+    path1_loss = path_kl_div_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
+    path2_loss = path_kl_div_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
+    path3_loss = path_kl_div_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
+    path4_loss = path_kl_div_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
+    path5_loss = path_kl_div_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
 
-
-    # TODO: change to cross-entropy
     path_pred_prob_d = torch.distributions.categorical.Categorical(logits=path_pred_prob)
     path_gt_prob_d = torch.distributions.categorical.Categorical(logits=plan_prob_gt)
     path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).mean(dim=0)
 
+    plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
+
+    return plan_loss
+
+
+# TODO: vectorize for speedup?
+def plan_mhp_loss(plan_pred, plan_gt, plan_prob_gt, device):
+
+    best_gt_plan_idx = torch.argmax(plan_prob_gt, dim=1)
+
+    paths = plan_pred.reshape(-1, 5, 991)
+    path1_pred = paths[:, 0, :-1].reshape(-1, 2, 33, 15)
+    path2_pred = paths[:, 1, :-1].reshape(-1, 2, 33, 15)
+    path3_pred = paths[:, 2, :-1].reshape(-1, 2, 33, 15)
+    path4_pred = paths[:, 3, :-1].reshape(-1, 2, 33, 15)
+    path5_pred = paths[:, 4, :-1].reshape(-1, 2, 33, 15)
+    path_pred_prob = paths[:, :, -1]
+    
+    path_gt = plan_gt[torch.arange(plan_gt.shape[0]), best_gt_plan_idx]
+    mean_gt_path, _ = mean_std(path_gt)
+
+    mean_pred_path1, std_pred_path1 = mean_std(path1_pred)
+    mean_pred_path2, std_pred_path2 = mean_std(path2_pred)
+    mean_pred_path3, std_pred_path3 = mean_std(path3_pred)
+    mean_pred_path4, std_pred_path4 = mean_std(path4_pred)
+    mean_pred_path5, std_pred_path5 = mean_std(path5_pred)
+
+
+    path1_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path1, std_pred_path1)
+    path2_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path2, std_pred_path2)
+    path3_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path3, std_pred_path3)
+    path4_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path4, std_pred_path4)
+    path5_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path5, std_pred_path5)
+
     # MHP loss
-    path_head_loss = [path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]
-    mask = torch.full((1, 5), 1e-6)
+    path_head_loss = torch.stack([path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]).T
 
-    path_head_loss = torch.tensor(path_head_loss)
-    idx = torch.argmin(path_head_loss)
-
-    mask[:, idx] = 1
+    idx = torch.argmin(path_head_loss, dim=1)
+    best_path_mask = torch.zeros((10,5), device=device)
+    mask = torch.full((10, 5), 1e-6, device=device)
+    best_path_mask[torch.arange(idx.shape[0]), idx] = 1
+    mask[torch.arange(idx.shape[0]), idx] = 1
 
     path_perhead_loss = torch.mul(path_head_loss, mask)
-    path_perhead_loss = path_perhead_loss.sum(dim=1)
+    path_perhead_loss = path_perhead_loss.sum(dim=1).mean()
+
+    cross_entropy_loss = CrossEntropyLoss(reduction='mean')
+    path_prob_loss = cross_entropy_loss(path_pred_prob, best_path_mask)
 
     plan_loss = path_perhead_loss + path_prob_loss
     return plan_loss
@@ -365,7 +400,7 @@ def train_batch(run, model, optimizer, stacked_frames, gt_plans, gt_plans_probs,
         recurr_out = outputs[:, 5960:].clone()  # -- > [32,512] important to refeed state of GRU
 
         with Timing(timings, 'path_plan_loss'):
-            single_step_loss = path_plan_loss(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :])
+            single_step_loss = plan_mhp_loss(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :], device)
 
         if i == seq_len - 1:
             # final hidden state in sequence, no need to backpropagate it through time
@@ -415,8 +450,8 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr
         recurr_input = val_outputs[:, 5960:].clone()  # --> [32,512] important to refeed state of GRU
         val_path_prediction = val_outputs[:, :4955].clone()  # --> [32,4955]
 
-        single_val_loss = path_plan_loss(
-            val_path_prediction, val_label_path[:, i, :, :, :, :], val_label_path_prob[:, i, :])
+        single_val_loss = plan_mhp_loss(
+            val_path_prediction, val_label_path[:, i, :, :, :, :], val_label_path_prob[:, i, :], device)
 
         val_batch_loss += single_val_loss
 
