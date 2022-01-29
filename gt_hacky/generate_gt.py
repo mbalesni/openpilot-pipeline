@@ -40,6 +40,7 @@ def generate_ground_truth(path_to_segment, model, force=False):
     input_frames, _ = load_transformed_video(path_to_segment)
     if input_frames is None: return
 
+    input_frames = input_frames.numpy()
     recurrent_state = np.zeros((1, 512)).astype(np.float32)
     desire = np.zeros((1, 8)).astype(np.float32)
     tc = np.array([[0, 1]]).astype(np.float32)

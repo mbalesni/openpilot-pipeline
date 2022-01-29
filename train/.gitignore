@@ -8,3 +8,6 @@ inputdata.npz
 *.txt
 echo 
 wandb
+refactor_train.py
+thesis_test.ipynb
+vis.py

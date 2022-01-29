@@ -1,15 +1,23 @@
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, message='Length of IterableDataset')
+warnings.filterwarnings("ignore", category=UserWarning,
+                        message='The given NumPy array is not writeable, and PyTorch does not support non-writeable tensors')
+warnings.filterwarnings("ignore", category=UserWarning, message='Using experimental implementation that allows \'batch_size > 1\'')
+
 import sys
 import numpy as np
 from tqdm import tqdm
 import h5py
 import glob
-from torch.utils.data import IterableDataset, DataLoader, Dataset
+from torch.utils.data import IterableDataset, DataLoader
 import os
 import cv2
 import math
 import torch
 import time
-import threading
+from torch import multiprocessing
+
 import subprocess
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa
@@ -61,7 +69,6 @@ def preprocess_frame(frame1, plot_img_width=640, plot_img_height=480, seq_len=11
 
 def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=480, seq_len=1190):
     
-    print(os.path.exists(path_to_segment))
     if os.path.exists(os.path.join(path_to_segment, 'video.hevc')):
         path_to_video = os.path.join(path_to_segment, 'video.hevc')
     elif os.path.exists(os.path.join(path_to_segment, 'fcamera.hevc')):
@@ -112,9 +119,67 @@ def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=
     return torch.from_numpy(stacked_frames).float(), rgb_frames
 
 
+def parse_affinity(cmd_output):
+    ''' 
+    Extracts the list of CPU ids from the `taskset -cp <pid>` command.
+
+    example input : b"pid 38293's current affinity list: 0-3,96-99,108\n" 
+    example output: [0,1,2,3,96,97,98,99,108]
+    '''
+    ranges_str = cmd_output.decode('utf8').split(': ')[-1].rstrip('\n').split(',')
+
+    list_of_cpus = []
+    for rng in ranges_str:
+        is_range = '-' in rng
+
+        if is_range:
+            start, end = rng.split('-')
+            rng_cpus = range(int(start), int(end)+1) # include end
+            list_of_cpus += rng_cpus
+        else:
+            list_of_cpus.append(int(rng))
+
+    return list_of_cpus
+
+
+def set_affinity(pid, cpu_list):
+    cmd = ['taskset', '-pc', ','.join(map(str, cpu_list)), str(pid)]
+    subprocess.check_output(cmd, shell=False)
+
+
+def get_affinity(pid):
+    cmd = ['taskset', '-pc',  str(pid)]
+    output = subprocess.check_output(cmd, shell=False)
+    return parse_affinity(output)
+
+
+def configure_worker(worker_id):
+    '''
+    Configures the worker to use the correct affinity.
+    '''
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is None:
+        worker_id = 0
+        num_workers = 1
+    else:
+        worker_id = worker_info.id
+        num_workers = worker_info.num_workers
+
+    worker_pid = os.getpid()
+    dataset = worker_info.dataset
+    
+    avail_cpus = get_affinity(worker_pid)
+    validation_term = 1 if dataset.validation else 0  # support two loaders at a time
+    offset = len(avail_cpus) - (num_workers * 2) # keep the first few cpus free (it seemed they were faster, important for BackgroundGenerator)
+    cpu_idx = max(offset + num_workers * validation_term + worker_id, 0)
+
+    # force the process to only use 1 core instead of all
+    set_affinity(worker_pid, [avail_cpus[cpu_idx]])
+
+
 class CommaDataset(IterableDataset):
 
-    def __init__(self, recordings_basedir, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42, single_frame_batches=False):
+    def __init__(self, recordings_basedir, batch_size, train_split=0.8, seq_len=32, validation=False, shuffle=False, seed=42):
         super(CommaDataset, self).__init__()
         """
         Dataloader for Comma model train. pipeline
@@ -126,13 +191,13 @@ class CommaDataset(IterableDataset):
 
         Args: ------------------
         """
+        self.batch_size = batch_size
         self.recordings_basedir = recordings_basedir
         self.validation = validation
         self.train_split = train_split
         self.shuffle = shuffle
         self.seq_len = seq_len
         self.seed = seed
-        self.single_frame_batches = single_frame_batches
 
         if self.recordings_basedir is None or not os.path.exists(self.recordings_basedir):
             raise TypeError("recordings path is wrong")
@@ -157,13 +222,12 @@ class CommaDataset(IterableDataset):
 
         printf("Subset # segments:", len(self.segment_indices))
 
+    # NOTE: this is a rough estimate (less or equal to the true value). Do NOT rely on this number.
     def __len__(self):
-        return len(self.segment_indices)
+        batches_per_segment = MIN_SEGMENT_LENGTH // self.seq_len
+        return len(self.segment_indices) * batches_per_segment // self.batch_size
 
     def __iter__(self):
-
-        timing = dict()
-
         # shuffle data subset after each epoch
         if self.shuffle:
             rng = np.random.default_rng(self.seed)
@@ -178,14 +242,6 @@ class CommaDataset(IterableDataset):
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
 
-        worker_pid = os.getpid()
-        cores_per_worker = os.cpu_count() // num_workers
-
-        # force the process to be gentle, i.e. use no more than `cores_per_worker` cores instead of all
-        
-        ### uncomment the below line for making the dataloader more efficient.
-        #subprocess.check_output(f'taskset -pc {worker_id*cores_per_worker}-{worker_id*cores_per_worker+cores_per_worker-1} {worker_pid}', shell=True)
-
         for segment_vidx in range(worker_id, len(self.segment_indices), num_workers):
 
             # retrieve true index of segment [0, 2331] using virtual index [0, 2331 * train_split]
@@ -197,7 +253,11 @@ class CommaDataset(IterableDataset):
             n_seqs = math.floor(segment_length / self.seq_len)
 
             _, frame2 = segment_video.read()  # initialize last frame
-            yuv_frame2 = bgr_to_yuv(frame2)
+            try:
+                yuv_frame2 = bgr_to_yuv(frame2)
+            except Exception as err:
+                printf('Failed to read segment video:', self.hevc_file_paths[segment_idx])
+                raise err
             
             # TODO: (for further optimization) check if model can handle images pre-processed through (shorter) path2.
             # path1 and path2 look identical when saved to a PNG, but have some 
@@ -209,52 +269,35 @@ class CommaDataset(IterableDataset):
             # path2 = bgr_to_rgb(frame2)
             # printf('diff between paths:', list((path1 - path2).flatten()))
 
-            for sequence_idx in range(n_seqs):
+            for sequence_idx in range(n_seqs): # with seq_len=200 this should run even fewer iterations than usual, so wtf?
 
                 segment_finished = sequence_idx == n_seqs-1
 
-                if not self.single_frame_batches:
-                    yuv_frame_seq = np.zeros((self.seq_len + 1, 1311, 1164), dtype=np.uint8)
-
-                    yuv_frame_seq[0] = yuv_frame2
-
+                yuv_frame_seq = np.zeros((self.seq_len + 1, 1311, 1164), dtype=np.uint8)
+                yuv_frame_seq[0] = yuv_frame2
 
                 # start iteration from 1 because we already read 1 frame before
                 for t_idx in range(1, self.seq_len + 1):
-                    sequence_finished = t_idx == self.seq_len
-
-                    yuv_frame1 = yuv_frame2
                     _, frame2 = segment_video.read()
+                    try:
+                        yuv_frame2 = bgr_to_yuv(frame2)
+                    except Exception as err:
+                        printf(f'Failed to read frame {sequence_idx*seq_len + t_idx} of segment:', self.hevc_file_paths[segment_idx])
+                        raise err
+                    yuv_frame_seq[t_idx] = yuv_frame2
 
-                    yuv_frame2 = bgr_to_yuv(frame2)
+                prepared_frames = transform_frames(yuv_frame_seq)
 
-                    if self.single_frame_batches:
-                        prepared_frames = transform_frames([yuv_frame1, yuv_frame2], timing)
-                    else:
-                        yuv_frame_seq[t_idx] = yuv_frame2
+                stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
+                for i in range(self.seq_len):
+                    stacked_frame_seq[i] = np.vstack(prepared_frames[i:i+2])[None].reshape(12, 128, 256)
 
-                    if self.single_frame_batches:
-                        stacked_frames = np.vstack(prepared_frames).reshape(12, 128, 256)
+                # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
+                abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
+                gt_plan_seq = segment_gts['plans'][abs_t_indices]
+                gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
 
-                        abs_t_idx = sequence_idx*self.seq_len + t_idx
-                        gt_plan = segment_gts['plans'][abs_t_idx]
-                        gt_plan_prob = segment_gts['plans_prob'][abs_t_idx]
-
-                        yield stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished, worker_id
-
-                if not self.single_frame_batches:
-                    prepared_frames = transform_frames(yuv_frame_seq)
-
-                    stacked_frame_seq = np.zeros((self.seq_len, 12, 128, 256), dtype=np.uint8)
-                    for i in range(self.seq_len):
-                        stacked_frame_seq[i] = np.vstack(prepared_frames[i:i+2])[None].reshape(12, 128, 256)
-
-                    # shift slice by +1 to skip the 1st step which didn't see 2 stacked frames yet
-                    abs_t_indices = slice(sequence_idx*self.seq_len+1, (sequence_idx+1)*self.seq_len+1)
-                    gt_plan_seq = segment_gts['plans'][abs_t_indices]
-                    gt_plan_prob_seq = segment_gts['plans_prob'][abs_t_indices]
-
-                    yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, True, worker_id
+                yield stacked_frame_seq, gt_plan_seq, gt_plan_prob_seq, segment_finished, worker_id
 
             segment_gts.close()
             segment_video.release()
@@ -374,25 +417,30 @@ class BatchDataLoader:
         gt_plan = torch.stack([item[1] for item in batch])
         gt_plan_prob = torch.stack([item[2] for item in batch])
         segment_finished = torch.tensor([item[3] for item in batch])
-        sequence_finished = torch.tensor([item[4] for item in batch])
 
-        return stacked_frames, gt_plan, gt_plan_prob, segment_finished, sequence_finished
+        return stacked_frames, gt_plan, gt_plan_prob, segment_finished
 
     def __len__(self):
         return len(self.loader)
 
 
-class BackgroundGenerator(threading.Thread):
+class BackgroundGenerator(multiprocessing.Process):
     def __init__(self, generator):
-        threading.Thread.__init__(self)
+        super(BackgroundGenerator, self).__init__() 
+        # TODO: use prefetch factor instead of harcoded value
         self.queue = torch.multiprocessing.Queue(2)
         self.generator = generator
-        self.daemon = True
         self.start()
 
     def run(self):
         while True:
             for item in self.generator:
+
+                # do not start (blocking) insertion into a full queue, just wait and then retry
+                # this way we do not block the consumer process, allowing instant batch fetching for the model
+                while self.queue.full():
+                    time.sleep(2)
+
                 self.queue.put(item)
             self.queue.put(None)
 
@@ -402,9 +450,11 @@ class BackgroundGenerator(threading.Thread):
             while next_item is not None:
                 yield next_item
                 next_item = self.queue.get()
-        except (ConnectionResetError, ConnectionRefusedError):
-            self.stop()
+        except (ConnectionResetError, ConnectionRefusedError) as err:
+            printf('[BackgroundGenerator] Error:', err)
+            self.shutdown()
             raise StopIteration
+
 """
 Loader for visualization
 """
@@ -430,12 +480,11 @@ if __name__ == "__main__":
     else:
         comma_recordings_basedir = "/gpfs/space/projects/Bolt/comma_recordings"
 
-    batch_size = num_workers =30  # MUST BE batch_size == num_workers
+    batch_size = num_workers = 30  # MUST BE batch_size == num_workers
     seq_len = 100
     prefetch_factor = 2
-    prefetch_warmup_time = 2  # seconds wait before starting iterating
-    train_split = 0.8
-    single_frame_batches = False  # set True to serve batches of single frames instead of sequences
+    prefetch_warmup_time = 0  # seconds wait before starting iterating
+    train_split = 0.99
 
     assert batch_size == num_workers, 'Batch size must be equal to number of workers'
 
@@ -444,18 +493,28 @@ if __name__ == "__main__":
     simulated_forward_time = batch_size * seq_len / simulated_model_fps
 
     # hack to get batches of different segments with many workers
-    train_dataset = CommaDataset(comma_recordings_basedir, train_split=train_split, seq_len=seq_len, shuffle=True, single_frame_batches=single_frame_batches)
+    train_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_split, seq_len=seq_len, shuffle=True)
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
     train_loader = BatchDataLoader(train_loader, batch_size=batch_size)
     train_loader = BackgroundGenerator(train_loader)
 
+    valid_dataset = CommaDataset(comma_recordings_basedir, batch_size=batch_size, train_split=train_split, seq_len=seq_len, shuffle=True, validation=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=None, num_workers=num_workers, shuffle=False, prefetch_factor=prefetch_factor, persistent_workers=True, collate_fn=None)
+    valid_loader = BatchDataLoader(valid_loader, batch_size=batch_size)
+    valid_loader = BackgroundGenerator(valid_loader)
+
     printf("Checking loader shapes...")
     printf()
     for epoch in range(3):
-        for idx, batch in enumerate(train_loader):
-            frames, plans, plans_probs, segment_finished, sequence_finished = batch
 
-            printf(f'Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
+        start_time = time.time()
+
+        for idx, batch in enumerate(train_loader):
+            batch_load_time = time.time() - start_time
+
+            frames, plans, plans_probs, segment_finished = batch
+
+            printf(f'{batch_load_time:.2f}s — Frames: {frames.shape}. Plans: {plans.shape}. Plan probs: {plans_probs.shape}. Segment finished: {segment_finished.shape}. Sequence finished: {sequence_finished.shape}')
 
             if idx == 0:
                 printf(f'Warming up pre-fetching {prefetch_warmup_time}s...')
@@ -463,4 +522,6 @@ if __name__ == "__main__":
 
             # <model goes here>
             time.sleep(simulated_forward_time)
+
+            start_time = time.time()
 
