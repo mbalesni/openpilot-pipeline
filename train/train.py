@@ -11,6 +11,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.optim as topt
+from torch.nn import CrossEntropyLoss
 from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_transformed_video, configure_worker
 from torch.utils.data import DataLoader
 import wandb
@@ -22,6 +23,7 @@ import gc
 import sys
 import dotenv
 import shutil
+import math
 
 dotenv.load_dotenv()
 
@@ -52,20 +54,27 @@ def visualization(lanelines, roadedges, calib_path, im_rgb):
 
     return vis_image
 
-def mean_std(array):
-
+def mean_std(array, eps=1e-10):
     mean = array[:, 0, :, :]
     std = array[:, 1, :, :]
-    std = torch.exp(std)  # to escape the negative values
 
-    # add eps to avoid zero values (fulfill laplace distribution requirement)
-    eps = 1e-10
-    mean = torch.add(mean, eps)
+    # we think incoming stds are actually logstds, so exponentiate them to make them non-negative
+    std = torch.exp(std)
+    # add eps to make positive
+    std = torch.add(std, eps)
 
     return mean, std
 
 
-def calculate_path_loss(mean1, mean2, std1, std2):
+def path_laplacian_nll_loss(mean_true, mean_pred, sigma, sigma_clamp: float = 1e-3, loss_clamp: float = 1000.):
+    err = torch.abs(mean_true - mean_pred)
+    sigma_min = torch.clamp(sigma, min=math.log(sigma_clamp))
+    sigma_max = torch.max(sigma, torch.log(1e-6 + err/loss_clamp))
+    nll = err * torch.exp(-sigma_max) + sigma_min
+    return nll.sum(dim=(1,2))
+
+
+def path_kl_div_loss(mean1, mean2, std1, std2):
     """
     scratch :Laplace or gaussian likelihood 
     model distillation: gaussian or laplace, KL divergence
@@ -76,8 +85,7 @@ def calculate_path_loss(mean1, mean2, std1, std2):
     return loss
 
 
-# TODO: vectorize for speedup?
-def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
+def plan_distill_loss(plan_pred, plan_gt, plan_prob_gt, device):
 
     paths = plan_pred.reshape(-1, 5, 991)
     path1_pred = paths[:, 0, :-1].reshape(-1, 2, 33, 15)
@@ -108,38 +116,70 @@ def path_plan_loss(plan_pred, plan_gt, plan_prob_gt):
     mean_pred_path5, std_pred_path5 = mean_std(path5_pred)
     mean_gt_path5, std_gt_path5 = mean_std(path5_gt)
 
-    path1_loss = calculate_path_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
-    path2_loss = calculate_path_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
-    path3_loss = calculate_path_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
-    path4_loss = calculate_path_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
-    path5_loss = calculate_path_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
+    path1_loss = path_kl_div_loss(mean_pred_path1, mean_gt_path1, std_pred_path1, std_gt_path1)
+    path2_loss = path_kl_div_loss(mean_pred_path2, mean_gt_path2, std_pred_path2, std_gt_path2)
+    path3_loss = path_kl_div_loss(mean_pred_path3, mean_gt_path3, std_pred_path3, std_gt_path3)
+    path4_loss = path_kl_div_loss(mean_pred_path4, mean_gt_path4, std_pred_path4, std_gt_path4)
+    path5_loss = path_kl_div_loss(mean_pred_path5, mean_gt_path5, std_pred_path5, std_gt_path5)
 
     path_pred_prob_d = torch.distributions.categorical.Categorical(logits=path_pred_prob)
     path_gt_prob_d = torch.distributions.categorical.Categorical(logits=plan_prob_gt)
     path_prob_loss = torch.distributions.kl.kl_divergence(path_pred_prob_d, path_gt_prob_d).mean(dim=0)
 
-    # naive loss
     plan_loss = path1_loss + path2_loss + path3_loss + path4_loss + path5_loss + path_prob_loss
 
-    '''
-    # winner-take-all loss
-    path_head_loss = [path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]
-    mask = torch.full((1, 5), 1e-6)
-
-    path_head_loss = torch.tensor(path_head_loss)
-    idx = torch.argmin(path_head_loss)
-
-    mask[:, idx] = 1
-
-    path_perhead_loss = torch.mul(path_head_loss, mask)
-    path_perhead_loss = path_perhead_loss.sum(dim=1)
-
-    plan_loss = path_perhead_loss + path_prob_loss
-    '''
     return plan_loss
 
 
-def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, 
+# TODO: vectorize for speedup?
+def plan_mhp_loss(plan_pred, plan_gt, plan_prob_gt, device):
+
+    best_gt_plan_idx = torch.argmax(plan_prob_gt, dim=1)
+
+    paths = plan_pred.reshape(-1, 5, 991)
+    path1_pred = paths[:, 0, :-1].reshape(-1, 2, 33, 15)
+    path2_pred = paths[:, 1, :-1].reshape(-1, 2, 33, 15)
+    path3_pred = paths[:, 2, :-1].reshape(-1, 2, 33, 15)
+    path4_pred = paths[:, 3, :-1].reshape(-1, 2, 33, 15)
+    path5_pred = paths[:, 4, :-1].reshape(-1, 2, 33, 15)
+    path_pred_prob = paths[:, :, -1]
+    
+    path_gt = plan_gt[torch.arange(plan_gt.shape[0]), best_gt_plan_idx]
+    mean_gt_path, _ = mean_std(path_gt)
+
+    mean_pred_path1, std_pred_path1 = mean_std(path1_pred)
+    mean_pred_path2, std_pred_path2 = mean_std(path2_pred)
+    mean_pred_path3, std_pred_path3 = mean_std(path3_pred)
+    mean_pred_path4, std_pred_path4 = mean_std(path4_pred)
+    mean_pred_path5, std_pred_path5 = mean_std(path5_pred)
+
+
+    path1_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path1, std_pred_path1)
+    path2_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path2, std_pred_path2)
+    path3_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path3, std_pred_path3)
+    path4_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path4, std_pred_path4)
+    path5_loss = path_laplacian_nll_loss(mean_gt_path, mean_pred_path5, std_pred_path5)
+
+    # MHP loss
+    path_head_loss = torch.stack([path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]).T
+
+    idx = torch.argmin(path_head_loss, dim=1)
+    best_path_mask = torch.zeros((10,5), device=device)
+    mask = torch.full((10, 5), 1e-6, device=device)
+    best_path_mask[torch.arange(idx.shape[0]), idx] = 1
+    mask[torch.arange(idx.shape[0]), idx] = 1
+
+    path_perhead_loss = torch.mul(path_head_loss, mask)
+    path_perhead_loss = path_perhead_loss.sum(dim=1).mean()
+
+    cross_entropy_loss = CrossEntropyLoss(reduction='mean')
+    path_prob_loss = cross_entropy_loss(path_pred_prob, best_path_mask)
+
+    plan_loss = path_perhead_loss + path_prob_loss
+    return plan_loss
+
+
+def train(run, model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, epoch, 
           log_frequency_steps, train_segment_for_viz, val_segment_for_viz, batch_size):
 
     recurr_input = torch.zeros(batch_size, 512, dtype=torch.float32, device=device, requires_grad=True)
@@ -171,7 +211,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, recurr_warmup, 
         stacked_frames, gt_plans, gt_plans_probs, segments_finished = batch
         segments_finished = torch.all(segments_finished)
 
-        loss, recurr_input = train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire,
+        loss, recurr_input = train_batch(run, model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire,
                            traffic_convention, recurr_input, device, timings, should_backprop=should_backprop)
 
         train_batch_time = multitimings.end('train_batch')
@@ -333,7 +373,7 @@ def validate(model, data_loader, batch_size, device):
         return val_avg_loss
 
 
-def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire, traffic_convention, recurr_input, device, timings, should_backprop=True):
+def train_batch(run, model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desire, traffic_convention, recurr_input, device, timings, should_backprop=True):
     batch_size_empirical = stacked_frames.shape[0]
     seq_len = stacked_frames.shape[1]
 
@@ -360,7 +400,8 @@ def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desi
         recurr_out = outputs[:, 5960:].clone()  # -- > [32,512] important to refeed state of GRU
 
         with Timing(timings, 'path_plan_loss'):
-            single_step_loss = path_plan_loss(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :])
+            loss_func = plan_distill_loss if run.config.distill else plan_mhp_loss
+            single_step_loss = loss_func(plan_predictions, gt_plans[:, i, :, :, :, :], gt_plans_probs[:, i, :], device)
 
         if i == seq_len - 1:
             # final hidden state in sequence, no need to backpropagate it through time
@@ -377,7 +418,7 @@ def train_batch(model, optimizer, stacked_frames, gt_plans, gt_plans_probs, desi
             complete_batch_loss.backward(retain_graph=True)
 
     with Timing(timings, 'clip_gradients'):
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), run.config.grad_clip)
 
     with Timing(timings, 'optimize_step'):
         optimizer.step()
@@ -410,8 +451,9 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr
         recurr_input = val_outputs[:, 5960:].clone()  # --> [32,512] important to refeed state of GRU
         val_path_prediction = val_outputs[:, :4955].clone()  # --> [32,4955]
 
-        single_val_loss = path_plan_loss(
-            val_path_prediction, val_label_path[:, i, :, :, :, :], val_label_path_prob[:, i, :])
+        loss_func = plan_distill_loss if run.config.distill else plan_mhp_loss
+        single_val_loss = loss_func(
+            val_path_prediction, val_label_path[:, i, :, :, :, :], val_label_path_prob[:, i, :], device)
 
         val_batch_loss += single_val_loss
 
@@ -448,22 +490,25 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=28, help="batch size")
     parser.add_argument("--date_it", type=str, required=True, help="run date/name")  # "16Jan_1_seg"
     parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
+    parser.add_argument("--grad_clip", type=float, default=torch.inf, help="gradient clip norm")
+    parser.add_argument("--l2_lambda", type=float, default=1e-4, help="weight decay rate")
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
+    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
+    parser.add_argument("--lrs_factor", type=float, default=0.75, help="lrs factor")
+    parser.add_argument("--lrs_min", type=float, default=1e-6, help="lrs min")
+    parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
+    parser.add_argument("--lrs_thresh", type=float, default=1e-4, help="lrs threshold")
+    parser.add_argument("--mhp_loss", dest='distill', help="use Laplacian MHP loss instead of distillation", action='store_false')  # "16Jan_1_seg"
+    parser.add_argument("--no_recurr_warmup", dest='recurr_warmup', action='store_false')
+    parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
     parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
+    parser.add_argument("--recurr_warmup", dest='recurr_warmup', action='store_true')
     parser.add_argument("--seed", type=int, default=42, help="random seed")
+    parser.add_argument("--seq_len", type=int, default=100, help="sequence length")
     parser.add_argument("--split", type=float, default=0.94, help="train/val split")
     parser.add_argument("--val_frequency", type=int, default=400, help="run validation every this many steps")
-    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-    parser.add_argument('--recurr_warmup', dest='recurr_warmup', action='store_true')
-    parser.add_argument('--no_recurr_warmup', dest='recurr_warmup', action='store_false')
-    parser.add_argument("--l2_lambda", type=float, default=1e-4, help="weight decay rate")
-    parser.add_argument("--lrs_thresh", type=float, default=1e-4, help="lrs threshold")
-    parser.add_argument("--lrs_min", type=float, default=1e-6, help="lrs min")
-    parser.add_argument("--lrs_factor", type=float, default=0.75, help="lrs factor")
-    parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
-    parser.add_argument("--seq_len", type=int, default=100, help="sequence length")
-    parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
     parser.set_defaults(recurr_warmup=True)
+    parser.set_defaults(distill=True)
     args = parser.parse_args()
  
     # for reproducibility
@@ -531,8 +576,8 @@ if __name__ == "__main__":
     printf('Validation visualization segment:', val_segment_for_viz)
 
     os.makedirs('tmp', exist_ok=True)
-    shutil.copytree(train_segment_for_viz, 'tmp/train_segment_for_viz')
-    shutil.copytree(val_segment_for_viz, 'tmp/val_segment_for_viz')
+    # shutil.copytree(train_segment_for_viz, 'tmp/train_segment_for_viz')
+    # shutil.copytree(val_segment_for_viz, 'tmp/val_segment_for_viz')
     train_segment_for_viz = 'tmp/train_segment_for_viz'
     val_segment_for_viz = 'tmp/val_segment_for_viz'
 
@@ -563,7 +608,7 @@ if __name__ == "__main__":
         with torch.autograd.profiler.profile(enabled=False):
             with torch.autograd.profiler.emit_nvtx(enabled=False, record_shapes=False):
                 for epoch in tqdm(range(epochs)):
-                    train(comma_model, train_loader, val_loader, optimizer, scheduler,
+                    train(run, comma_model, train_loader, val_loader, optimizer, scheduler,
                         recurr_warmup, epoch, log_frequency_steps,
                         train_segment_for_viz, val_segment_for_viz, batch_size)
 
