@@ -490,7 +490,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=28, help="batch size")
     parser.add_argument("--date_it", type=str, required=True, help="run date/name")  # "16Jan_1_seg"
     parser.add_argument("--epochs", type=int, default=15, help="number of epochs")
-    parser.add_argument("--grad_clip", type=float, default=1.0, help="gradient clip norm")
+    parser.add_argument("--grad_clip", type=float, default=torch.inf, help="gradient clip norm")
     parser.add_argument("--l2_lambda", type=float, default=1e-4, help="weight decay rate")
     parser.add_argument("--log_frequency", type=int, default=100, help="log to wandb every this many steps")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
@@ -498,7 +498,7 @@ if __name__ == "__main__":
     parser.add_argument("--lrs_min", type=float, default=1e-6, help="lrs min")
     parser.add_argument("--lrs_patience", type=int, default=3, help="lrs patience")
     parser.add_argument("--lrs_thresh", type=float, default=1e-4, help="lrs threshold")
-    parser.add_argument("--mhp_loss", dest='distill', help="use Laplacian MHP loss instead of distillation", action='store false')  # "16Jan_1_seg"
+    parser.add_argument("--mhp_loss", dest='distill', help="use Laplacian MHP loss instead of distillation", action='store_false')  # "16Jan_1_seg"
     parser.add_argument("--no_recurr_warmup", dest='recurr_warmup', action='store_false')
     parser.add_argument("--no_wandb", dest="no_wandb", action="store_true", help="disable wandb")
     parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
