@@ -134,6 +134,8 @@ def plan_distill_loss(plan_pred, plan_gt, plan_prob_gt, device):
 # TODO: vectorize for speedup?
 def plan_mhp_loss(plan_pred, plan_gt, plan_prob_gt, device):
 
+    batch_size = plan_pred.shape[0]
+
     best_gt_plan_idx = torch.argmax(plan_prob_gt, dim=1)
 
     paths = plan_pred.reshape(-1, 5, 991)
@@ -164,8 +166,8 @@ def plan_mhp_loss(plan_pred, plan_gt, plan_prob_gt, device):
     path_head_loss = torch.stack([path1_loss, path2_loss, path3_loss, path4_loss, path5_loss]).T
 
     idx = torch.argmin(path_head_loss, dim=1)
-    best_path_mask = torch.zeros((10,5), device=device)
-    mask = torch.full((10, 5), 1e-6, device=device)
+    best_path_mask = torch.zeros((batch_size, 5), device=device)
+    mask = torch.full((batch_size, 5), 1e-6, device=device)
     best_path_mask[torch.arange(idx.shape[0]), idx] = 1
     mask[torch.arange(idx.shape[0]), idx] = 1
 
