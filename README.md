@@ -101,11 +101,11 @@ For knowledge distillation, we run the official Openpilot model on the full data
 
 Real ground truth creation is currently not implemented.
 
-For the dataset, we use [comma2k19](https://github.com/commaai/comma2k19), a 33-hour driving dataset made by CommaAI: 
+For the dataset, we use [comma2k19](https://github.com/commaai/comma2k19), a 33-hour (1980 min) driving dataset made by CommaAI: 
 
 > The data was collected using comma EONs that has sensors similar to those of any modern smartphone including a road-facing camera, phone GPS, thermometers and 9-axis IMU. Additionally, the EON captures raw GNSS measurements and all CAN data sent by the car."
 
-To use your own data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future when true ground truth creation is implemented, you *might* be able to use a different device, but you'll need to adjust some of the hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc).
+To use your own data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future when true ground truth creation is implemented, you *might* be able to use a different device, but you'll need to adjust some of the hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc). If you need more data than you can store on the device or Comma cloud, or you want to do it at scale, you can use a custom cloud server that re-implements Comma's API, called [retropilot-server](https://github.com/florianbrede-ayet/retropilot-server).
 
 
 ## Training pipeline
@@ -139,38 +139,43 @@ To use your own data for training, you currently need to collect it with a [Comm
 
 
 
-### Data loading @nikebless
-- How we create batches (mention requirement of 1 CPU per 1 sample)
+### Data loading
+
+In our preliminary experiments, we found that having more driving segments per batch is crucial for training. Batch size 8 (8 different segments per batch) leads to overfitting, while batch size 28 (maximum we could fit on our machine) gives a good performance.
+
+PyTorch supports parallel batch loading *but not parallel sample loading*, so we implemented a custom data loader where each worker loads a single segment at a time, and a separate background process combines the results into a single batch. This is paired with pre-fetching and a (super hacky) synchronization mechanism to ensure the collation process doesn't block the shared memory until the main process has received the batch. 
+
+Altogether this results in relatively low latency: ~150ms waiting + ~175ms transfer to GPU on our machine. Inter-process messaging instead of the hacky sync mechanism might bring the waiting down to <10ms. Speeding up transfer to GPU might be done through memory pinning, but it didn't work when I tried pinning tensors before pushing them to the shared memory queue. It probably has to be done on the consumer process side, but I am not sure how to keep it from slowing down the rest of the pipeline.
+
+**NOTE:** The data loader requires *two CPU-cores (one train, one validation) per unit of batch size*, plus additional two CPU-cores for the main and background (collation) processes. Per-unit-of-batch-size cost could be brought down to 1 CPU-core if we implement stopping/restarting the train/validation workers as needed.
 
 ## How to Use
 
-### System Requirements @nikebless
-- for GT creation we need sudo + probably Ubuntu 20.04 (for compiling openpilot)
-- for training, no sudo required, anything that can run pytorch
+### System Requirements
+
+- Ubuntu 20.04 LTS **with sudo** for compiling openpilot & ground truth creation. Training can probably be done on any Linux machine where PyTorch is supported.
+- 50+ CPU cores, but more (~128-256) would mean better GPU utilization.
+- GPU with at least 6 GB of memory.
 
 ### Installations
-1. [Install openpilot](https://github.com/commaai/openpilot/tree/master/tools) (for LogReader mainly)
-2. Install conda environment.
-*
-  ```
-  git clone https://github.com/nikebless/openpilot-pipeline.git
-  ```
-* Install conda from [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
+1. [Install openpilot](https://github.com/commaai/openpilot/tree/master/tools)
+2. Clone the repo .
+```bash
+git clone https://github.com/nikebless/openpilot-pipeline.git
+```
 
-*
-  ```
-  cd openpilot-pipeline/
-  conda env create -f environment.yml
-  ```
+3. Install conda from [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
+4. Install the repo's conda environment: <!-- TODO: update environment with imageio and moviepy -->
+
+```bash
+cd openpilot-pipeline/
+conda env create -f environment.yml
+```
 
 ### Running
 
-1. Get dataset: @nikebless
-  - simplest: comma2k19
-  - custom data small scale: copy from comma device
-  - custom data large scale: retropilot
-2. Run ground truth creation @nikebless
-  - gt_hacky + parse_logs (mention we're not using RPY yet)
+1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. ither from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline)).
+2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
 3. Set up wandb @gauti
 4. Run Training
 * via slurm script
@@ -206,7 +211,11 @@ The only required parameter are `--date_it` and `--recordings_basedir`, by runni
 ### Using the model @gauti
 
 
-0. Save model in ONNX
+0. Convert the model to ONNX format
+  ```bash
+  cd train
+  python torch_to_onnx.py <model_path>
+  ```
 1. In simulation (Carla)
 2. In the Comma 2 device — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
 
@@ -217,7 +226,13 @@ The only required parameter are `--date_it` and `--recordings_basedir`, by runni
 
 ## Technical improvement ToDos
 
+
+**Important**
+- [ ] Use drive calibration info in inputs transformation & for visualization
 - [ ] Do not crash training when a single video failed to read
+
+**Nice to haves**
+- [ ] Better synchronization mechanism to speed up data loader
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
