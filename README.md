@@ -181,7 +181,7 @@ conda env create -f environment.yml
 
 1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. Either from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline).
 2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
-3. Set up wandb @gauti
+3. Set up [wandb](https://docs.wandb.ai/quickstart)
 4. Run Training
 * via slurm script
   ```bash
@@ -222,6 +222,25 @@ cd train
 python torch_to_onnx.py <model_path>
 ```
 1. In simulation (Carla)
+* Make sure that you have installed [openpilot](https://github.com/commaai/openpilot/tree/master/tools). 
+* Make sure that cuda drivers are installed properly (`nvidia-smi` is available) 
+* Go to the sim folder in cloned openpilot repo. 
+  ```bash
+  cd openpilot/tools/sim 
+  ```
+* Add your model in `openpilot/models` and rename it to `supercombo.onnx`.
+* After that you need to edit the script [start_openpilot_docker.sh](https://github.com/commaai/openpilot/blob/master/tools/sim/start_openpilot_docker.sh), and add a bind mount at the end of the `docker run` command specifying the source and target path for the docker container.
+```
+Disclaimer: May be the current version of openpilot Carla is broken. And the bash script always pull the latest version of sim. So you can go back in the history (https://github.com/commaai/openpilot/pkgs/container/openpilot-sim)  and based on timeline of working commits change the tag in the docker run command in the script.
+```
+* Open two separate terminals and execute these bash scripts. 
+  ```bash
+  cd openpilot/tools/sim 
+
+  ./start_carla.sh
+  
+  ./start_openpilot_docker.sh
+  ```
 2. In your car (via the Comma 2 device) — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
 
 ## Our Results @gauti
