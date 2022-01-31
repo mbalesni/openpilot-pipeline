@@ -30,7 +30,7 @@ The neural network architecurre of the model consists of a Convolutional feature
 
 The model visualized above is taken from [Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models) and you can find the same 'supercombo.onnx' model in this [repository ](https://github.com/nikebless/openpilot-pipeline/tree/main/common/models). 
 
-The visualization tool used for onnx architecures: [netron](https://github.com/lutzroeder/netron) and the installation instructions can be found under the parent repository.
+A nice visualization tool for ONNX models: [netron](https://netron.app/).
 
 Detailed definations of the inputs and outputs of the model are mentioned [here](https://github.com/commaai/openpilot/tree/master/models). 
 ### Inputs
@@ -217,7 +217,7 @@ cd train
 python torch_to_onnx.py <model_path>
 ```
 1. In simulation (Carla)
-2. In the Comma 2 device — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
+2. In your car (via the Comma 2 device) — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
 
 ## Our Results @gauti
 
