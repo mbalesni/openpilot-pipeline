@@ -164,7 +164,7 @@ Altogether this results in relatively low latency: ~150ms waiting + ~175ms trans
 
 ### Installations
 1. [Install openpilot](https://github.com/commaai/openpilot/tree/master/tools)
-2. Clone the repo .
+2. Clone the repo
 ```bash
 git clone https://github.com/nikebless/openpilot-pipeline.git
 ```
@@ -179,7 +179,7 @@ conda env create -f environment.yml
 
 ### Run
 
-1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. Either from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline)).
+1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. Either from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline).
 2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
 3. Set up wandb @gauti
 4. Run Training
