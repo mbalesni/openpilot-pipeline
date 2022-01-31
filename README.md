@@ -25,9 +25,9 @@ The neural network architecurre of the model consists of a Convolutional feature
      <td>Output Heads</td>
   </tr>
   <tr>
-    <td><img src="images/Conv_extractor.png" width=100 height=250></td>
-    <td><img src="images/GRU.png" width=300 height=250></td>
-    <td><img src="images/output_heads.png"  height=250></td>
+    <td><img src="doc/Conv_extractor.png" width=100 height=250></td>
+    <td><img src="doc/GRU.png" width=300 height=250></td>
+    <td><img src="doc/output_heads.png"  height=250></td>
   </tr>
  </table>
 
@@ -48,9 +48,11 @@ The primary input to the model are two consecutive frames which are converted in
 
 Apart from the images there are three more inputs which are fed to the model in the intermediate stage where extracted features are passed into the GRU. So the GRU takes in extracted CNN features, desire, traffic convention and recurrent state. 
 * ##### Desire
-  * Desire in general for one sample is a 1-D vector with shape of `(1,8)`. In simpler terms it can be interpreted by the desirable actions performed by the driver during a drive scenario when openpilot is engaged. 
-![desire](images/desire.png?raw=true)
-More concrete infromation can be obtained from [here](https://github.com/commaai/cereal/blob/5c64eaab789dfa67a210deaa2530788843474999/log.capnp). 
+  Desire in general for one sample is a 1-D vector with shape of `(1,8)`. In simpler terms it can be interpreted by the desirable actions performed by the driver during a drive scenario when openpilot is engaged. 
+
+    ![desire](doc/desire.png?raw=true)
+    
+  More concrete infromation can be obtained from [here](https://github.com/commaai/cereal/blob/5c64eaab789dfa67a210deaa2530788843474999/log.capnp). 
 * ##### Traffic Convention
   * As similar to desire for one sample it is a 1-D vector of shape `(1,2)` which is one hot encoded according to the LHD(Right Hand Driving) and RHD(Right Hand Driving). 
 * ##### Recurrent State
