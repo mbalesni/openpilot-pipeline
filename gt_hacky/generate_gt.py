@@ -12,6 +12,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import extract_preds, get_segment_dirs, printf
 from train.dataloader import load_transformed_video
+from train.parse_logs import save_segment_calib
+
 
 
 def frames_to_tensor(frames):
@@ -120,5 +122,10 @@ if __name__ == '__main__':
     for path_to_segment in pbar:
         start_time = time.time()
         generate_ground_truth(path_to_segment, model, force=False)
-        printf(f'{time.time() - start_time:.2f}s - Done segment: {path_to_segment} ')
+        printf(f'{time.time() - start_time:.2f}s - Generated GT for segment: {path_to_segment} ')
+
+        start_time = time.time()
+        save_segment_calib(path_to_segment, force=False)
+        printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
+
 
