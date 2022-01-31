@@ -213,7 +213,7 @@ The only required parameter are `--date_it` and `--recordings_basedir`, by runni
 * `--seq_len` - length of sequence fetched by the dataloader for a batch, default is 100.
 * `--split` - training and validation dataset split, default is 0.94
 * `--val_frequency` - after how many iterations you want to enable the visulization of predictions by the trained model and validation.
-### Using the model @gauti
+### Using the model
 
 
 0. Convert the model to ONNX format
@@ -243,10 +243,18 @@ Disclaimer: May be the current version of openpilot Carla is broken. And the bas
   ```
 2. In your car (via the Comma 2 device) — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
 
-## Our Results @gauti
+## Our Results
 
-- (maybe) loss metrics
-- visualized predictions
+* Visualization of the results via model trained with MHP (Multi-hypothesis loss) and KL divergence (Distillation). 
+<table>
+  <tr>
+    <td>Likelihood model (~1h of training) </td>
+     <td>Distillation model (~20h of training)</td>
+  </tr>
+  <tr>
+    <td><img src="doc/MHP_vis.png" ></td>
+    <td><img src="doc/distill_viz.png" ></td>
+ </table>
 
 ## Technical improvement ToDos
 
