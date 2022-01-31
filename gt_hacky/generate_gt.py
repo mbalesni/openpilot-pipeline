@@ -124,8 +124,9 @@ if __name__ == '__main__':
         generate_ground_truth(path_to_segment, model, force=False)
         printf(f'{time.time() - start_time:.2f}s - Generated GT for segment: {path_to_segment} ')
 
-        start_time = time.time()
-        save_segment_calib(path_to_segment, force=False)
-        printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
+        # TODO: test that this works & uncomment
+        # start_time = time.time()
+        # save_segment_calib(path_to_segment, force=False)
+        # printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
 
 
