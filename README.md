@@ -172,19 +172,19 @@ cd openpilot-pipeline/
 conda env create -f environment.yml
 ```
 
-### Running
+### Run
 
-1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. ither from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline)).
+1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. Either from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline)).
 2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
 3. Set up wandb @gauti
 4. Run Training
 * via slurm script
-  ```
+  ```bash
   sbatch train.sh --date_it <iteration_name> --recordings_basedir <dataset_dir>
   ```
 
 * via slurm script
-  ```
+  ```bash
   python train.py --date_it <iteration_name> --recordings_basedir <dataset_dir>
   ```
 The only required parameter are `--date_it` and `--recordings_basedir`, by running the above commands the default params will be used. If in case you want to alter the params. Detailed description of the parameters:
@@ -212,10 +212,10 @@ The only required parameter are `--date_it` and `--recordings_basedir`, by runni
 
 
 0. Convert the model to ONNX format
-  ```bash
-  cd train
-  python torch_to_onnx.py <model_path>
-  ```
+```bash
+cd train
+python torch_to_onnx.py <model_path>
+```
 1. In simulation (Carla)
 2. In the Comma 2 device — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
 
