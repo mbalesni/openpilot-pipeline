@@ -10,6 +10,8 @@ import torchvision
 import numpy as np
 
 """
+Supercombo model implemented from scratch. Not used right now. Instead, use onnx2pytorch conversion in model.py.
+
 To do:: code refactoring, class summary and arguments description
 
 expansion factor of 6 for depthwise conv. in all the next residual layers

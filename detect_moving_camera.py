@@ -2,6 +2,9 @@ import cv2
 import os 
 
 """
+
+Script for detecting if the car in the video is moving. Not used yet.
+
 Algorithm:
 
 1. Create 4 boxes on the image boundaries.
