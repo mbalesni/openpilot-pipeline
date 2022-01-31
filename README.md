@@ -4,7 +4,8 @@
 
 This repo attempts to re-create the full data & training pipeline to allow training custom driving models for Openpilot.
 
-[![Watch the video](![MHP6](https://user-images.githubusercontent.com/25569111/151779311-5bd1ef4c-c2e8-4f00-a130-e05908eea045.jpg))](https://user-images.githubusercontent.com/25569111/151778477-3b577b6f-5c17-4c82-a23b-be9a278b8d5c.mp4)
+![compressed-model](https://user-images.githubusercontent.com/25569111/151782155-59a3fe8f-e12e-414b-9f58-1c699924eb1c.gif)
+
 
 ## About
 
