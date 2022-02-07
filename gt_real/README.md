@@ -1,8 +1,10 @@
-# Path ground-truth creation
+# Creating ground truths using sensors
 
-Creating path ground truth positions for training the supercombo model.
+**NOT IMPLEMENTED** 
 
-Right now it uses unprocessed live positioning (`livePositionKalman` from `rlog.bz2`). This will later be improved by processing GNSS positions with Laika and then applying a more complex kalman filter (probably `LocKalman` from `loc_kf.py`).
+Creating path ground truths using GNSS, IMU and visual odometry.
+
+Right now it uses unprocessed live positioning from the device (`livePositionKalman` from `rlog.bz2`). This should be improved by processing GNSS positions with Laika and then applying a kalman filter (probably `LocKalman` from `loc_kf.py`).
 
 # Install
 
