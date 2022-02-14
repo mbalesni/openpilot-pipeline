@@ -2,7 +2,7 @@
 
 [Openpilot](https://github.com/commaai/openpilot) is the currently leading[^1] Advanced Driver-Assitance System (ADAS), developed & open-sourced by [Comma AI](https://comma.ai/).
 
-This repo attempts to re-create the full data & training pipeline to allow training custom driving models for Openpilot.
+This repo attempts to re-create the complete data & training pipeline to allow training custom driving models for Openpilot.
 
 ![compressed-model](https://user-images.githubusercontent.com/25569111/151782155-59a3fe8f-e12e-414b-9f58-1c699924eb1c.gif)
 
@@ -11,12 +11,15 @@ This repo attempts to re-create the full data & training pipeline to allow train
 
 The project is *in early development*. The ultimate goal is to create a codebase for training end-to-end autonomous driving models.
 
-The only implemented feature right now is distillation of path planning *from the original Openpilot driving model*. To train from scratch, we need to implement creation of accurate ground truth paths by processing data from cars' GNSS, IMU and visual odometry with [laika](https://github.com/commaai/laika) and [rednose](https://github.com/commaai/rednose) (PRs welcome!).
+Right now, the only implemented feature is distillation of path planning *from the original Openpilot driving model*. To train from scratch, we need to implement the creation of accurate ground truth paths by processing data from cars' GNSS, IMU, and visual odometry with [laika](https://github.com/commaai/laika) and [rednose](https://github.com/commaai/rednose) (PRs welcome!).
 
 Below we describe the implemented parts of the pipeline and current training results.
 
 ## Model
-The neural network architecurre of the model consists of a Convolutional feature extractor which is a Resnet based custom feature extractor, followed by a GRU (used to capture the temporal context) and at the end we have different outputs heads which comprises of fully connnected layers responisble for outputs like paths, lanelines road edges and other meta information which is explained in detail below. 
+The neural network architecture can be broken down into three parts:
+convolutional feature extractor (based on Resnet), followed by
+a GRU (used to capture the temporal context)
+several fully-connected branches for outputting paths, lane lines, road edges, etc. ( explained in detail below) 
 
 <table>
   <tr>
@@ -31,86 +34,64 @@ The neural network architecurre of the model consists of a Convolutional feature
   </tr>
  </table>
 
-The model visualized above is taken from [Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models) and you can find the same 'supercombo.onnx' model in this [repository ](https://github.com/nikebless/openpilot-pipeline/tree/main/common/models). 
+The model visualized above is `supercombo.onnx` from [Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models). You can find a copy of it in this [repository ](https://github.com/nikebless/openpilot-pipeline/tree/main/common/models). 
 
-A nice visualization tool for ONNX models: [netron](https://netron.app/).
-
-Detailed definations of the inputs and outputs of the model are mentioned [here](https://github.com/commaai/openpilot/tree/master/models). 
+Detailed definitions of the inputs and outputs of the model are mentioned [here](https://github.com/commaai/openpilot/tree/master/models). 
 ### Inputs
-As mentioned above we can divide the model architecture into two parts encoder and decoder. Where the encoder part is made up of CNN feature extractor and a GRU, whereas decoder is mutliheaded fully connected layers responsible for outputs. 
+As mentioned above, we can divide the model architecture into encoder and decoder. The encoder includes a CNN feature extractor and a GRU, and the decoder is several branches of fully connected layers ending with task-specific outputs. 
 
-The primary input to the model are two consecutive frames which are converted into YUV 4:2:0 format and stacked to form a tensor of shape `(1,12,128,256)`.
+The primary input to the model is two consecutive camera frames. They are converted into YUV 4:2:0 format, reprojected, and stacked to form a tensor of shape `(N,12,128,256)`.
 * ##### YUV 4:2:0
   * It is a color subsampling technique.
-  * Ecodes only 20% of the color infromation.
+  * Encodes only 20% of the color infromation.
   * Saves memory footprint
   * Computationally efficient. 
 
-Apart from the images there are three more inputs which are fed to the model in the intermediate stage where extracted features are passed into the GRU. So the GRU takes in extracted CNN features, desire, traffic convention and recurrent state. 
+Three other model inputs are fed after the convolutional extractor as input for the GRU: desire, traffic convention, and recurrent state. 
+
 * ##### Desire
-  Desire in general for one sample is a 1-D vector with shape of `(1,8)`. In simpler terms it can be interpreted by the desirable actions performed by the driver during a drive scenario when openpilot is engaged. 
+  Desire is a one-hot vector of shape `(N,8`). It is used to condition the model for specific actions:
 
     ![desire](doc/desire.png?raw=true)
     
-  More concrete infromation can be obtained from [here](https://github.com/commaai/cereal/blob/5c64eaab789dfa67a210deaa2530788843474999/log.capnp). 
+  The class above is from the [logs classes definition file](https://github.com/commaai/cereal/blob/5c64eaab789dfa67a210deaa2530788843474999/log.capnp#L894-L902). 
+
 * ##### Traffic Convention
-  * As similar to desire for one sample it is a 1-D vector of shape `(1,2)` which is one hot encoded according to the LHD(Right Hand Driving) and RHD(Right Hand Driving). 
+  * Traffic convention is a one-hot vector of shape `(N,2)`, conditioning the model with the local driving side convention (left-hand or right-hand).
+
 * ##### Recurrent State
-  * This is basically taken from the output of the network which is refeed again to the the GRU. 
+  * GRU memory of shape `(N,512)`. 
 
 ### Outputs
-At the last part of the architecure all the ouputs from the fully connected branches are concatenated, thus the output of the model is of shape `(n,6472)` where n is the batch size.
-The output vector is parsed according to index and the outputs can be obtained. The method to parse the output vector can be found in the older versions of the [openpilot](https://github.com/commaai/openpilot/blob/v0.8.5/selfdrive/modeld/models/driving.cc) and can be obtained [via](https://github.com/commaai/openpilot/tree/master/models). All the outputs are predicted in the form of mean, standard deviation and logits and regressed over time. All the predictions like path plans, lanelines, road_edges  are carried out for future 33 timestamps which spans upto 10 seconds from the current frame and each time stamp is associated with a distance from 0 to 192 meters. You can find the refference for that in the openpilot code with arguments named **T_IDXS** and **X_IDXS**. All the outputs from the model are predicted in comma's so called calibrated frame of refference, which is explained in detail [here](https://github.com/commaai/openpilot/tree/master/common/transformations).
-* ##### Paths Plans
-  * The model predicts 5 potential desired plans with the shape of $(n, 4955)$, which can be further splitted into 5 equal arrays with shape `(1,991)`. 
-  * Further `(1,991)` is divided into paths and path probabilty.
-  * Each path is associated with a probability.
-  * To obtain the actual meaningful arrays for one path `(1,990)` can be reshaped to `(1,2,33,15)`.
-  * `[:, 0, :, :]` = mean and  std = `[:, 1, :, :]`, for the following values.
-  
-* ##### Lanelines 
-  * Modle predicts 4 potential lanelines, where the shape of the parsed vector is `(n,528)`.
-  * This `(n,528)` can be further reshaped into `(4,2,33,2)`.
-  * The four lanelines can be named as outer_left, inner_left, inner_right, outer_right.
-  * The ego vehicle is always in the middle lane(inner_left and inner_right).
-* ##### Laneline Probabilites 
-  * Probability that each of the 4 lanes exist.
-* ##### Road Edges
-  * Model predicts two road edges left and right. 
+The outputs from the task-specific branches are concatenated, resulting in the model output of shape `(N,6472)`.
+The code to manually parse the outputs can be found in the older versions of the [openpilot](https://github.com/commaai/openpilot/blob/v0.8.9/selfdrive/modeld/models/driving.cc#L15-L49). Most outputs are predicted in the form of mean and standard deviation over time. Path plans, lane lines, road edges, etc are predicted for 33 timestamps [quadratically spaced out](https://github.com/commaai/openpilot/blob/7d3ad941bc4ba4c923af7a1d7b48544bfc0d3e13/selfdrive/common/modeldata.h#L14-L25) for 10 seconds or 192 meters from the current position. These predictions are in the so-called calibrated frame of reference, explained in detail [here](https://github.com/commaai/openpilot/tree/master/common/transformations).
 
-* ##### Leads
-* ##### Leads Probabilites 
-* ##### Desire State
-
-* ##### Meta
-
-* ##### Pose
-
-* ##### Recurrent State
-
+Comma explain model outputs in the [Openpilot model readme](https://github.com/commaai/openpilot/tree/7d3ad941bc4ba4c923af7a1d7b48544bfc0d3e13/models).
 
 ### Converting the model from ONNX to PyTorch
 
-To not have to recreate the Openpilot model from scratch, we convert it from the ONNX format to PyTorch using [onnx2pytorch](https://github.com/ToriML/onnx2pytorch). Note: there is a bug in onnx2pytorch which makes it not work with openpilot's model; follow this [PR](https://github.com/ToriML/onnx2pytorch/pull/38) to fix it.
+To fine-tune an existing driving model, we convert it from the ONNX format to PyTorch using [onnx2pytorch](https://github.com/ToriML/onnx2pytorch). Note: there is a bug in onnx2pytorch that impacts the outputs; until this [PR](https://github.com/ToriML/onnx2pytorch/pull/38) is merged, a [manual fix](https://github.com/nikebless/openpilot-pipeline/blob/main/train/model.py#L28-L29) is necessary.
 
 ### Loss functions
-- As mentioned above we are doing model distillation and currently training for just paths. All the predictions are in the terms of mean, standard deviation and logits. So we are first creating distribution [objects](https://pytorch.org/docs/1.7.1/distributions.html) and then calculating KL divergence for those distribution objects. 
 
-- In the case when we are not using the model distillation we can use Gaussian or Laplacian NLL losses for all the regression outputs. For all the Multihypothesis strategies we can implement a basic-winner-to-take-all loss. 
+As mentioned above, we are currently doing only distillation of path prediction. We implement two loss functions:
 
-- If we try to train for more than one task, the total loss can be calculated by summing all the losses for the tasks or task-loss balancing strategies can be implemeneted for refine results.  
+- [KL-divergence](https://github.com/nikebless/openpilot-pipeline/blob/main/train/train.py#L69-L77)
+- [Winner-takes-all Laplacian NLL](https://github.com/nikebless/openpilot-pipeline/blob/main/train/train.py#L61-L66)
+
+The latter one works much better, and the code for it was shared with us by folks at CommaAI (thanks a lot!).
 
 ## Data pipeline
 
-For knowledge distillation, we run the official Openpilot model on the full dataset and save the outputs. This is done by `gt_hacky`.
+A script in `gt_hacky` runs the official Openpilot model on the full dataset and saves the outputs.
 
-Real ground truth creation is currently not implemented.
+True ground truth creation is currently not implemented.
 
 For the dataset, we use [comma2k19](https://github.com/commaai/comma2k19), a 33-hour (1980 min) driving dataset made by CommaAI: 
 
 > The data was collected using comma EONs that has sensors similar to those of any modern smartphone including a road-facing camera, phone GPS, thermometers and 9-axis IMU. Additionally, the EON captures raw GNSS measurements and all CAN data sent by the car."
 
-To use your own data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future when true ground truth creation is implemented, you *might* be able to use a different device, but you'll need to adjust some of the hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc). If you need more data than you can store on the device or Comma cloud, or you want to do it at scale, you can use a custom cloud server that re-implements Comma's API, called [retropilot-server](https://github.com/florianbrede-ayet/retropilot-server).
+To use your data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future, when true ground truth creation is implemented, you *might* be able to use a different device. Still, you'll need to adjust some hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc). If you need more data than you can store on the device or Comma cloud or want to do it at scale, you can use a custom cloud server that re-implements Comma's API, called [retropilot-server](https://github.com/florianbrede-ayet/retropilot-server).
 
 
 ## Training pipeline
@@ -119,19 +100,16 @@ To use your own data for training, you currently need to collect it with a [Comm
 
 
 * **General:** 
-  * A batch from the dataloader consists of stacked frames, groundtruth of plans and plan probabilities and a tensor which will define when a segment is finished. 
   * Recurrent state of the GRU and desire are intialized with zeros. 
-  * Traffic convention is initialized as a one-hot vector with LHD.
-  * An iteration is completed when a batch is processed.  
-  * For a single iteration samples are processed by looping over sequence length and step loss is calculated and in the end batch loss is calculated by diving it by sequence lenght and batch size. 
-  * By dividing the train loss and validation loss by sequence length and batch size, we can  compare loss metrics for mulitple runs with different sequence length and batch size.
+  * Traffic convention is hard-coded for left-hand-side driving.
+  * A batch consists of `batch_size` sequences of length `seq_len` each from a different one-minute driving segment to reduce data correlation.
 
 * **GRU training Logic:**
-  * Recurrent Wramup, is introduced when the training starts, basically gradients are not propagated back for certain iterations, where as the recurrent state is updated.
-  * After achievening the recurrent warmup stage, the training is resumed normally.
-  * Recurrent state is updated everytime while iterating over batches of sequence except for the last sequence and it is detached from the computational graph.
-  * The final hidden state is used a initial hidden state for next iteration.
-  * When a segment is finished while fetching data by the dataloader recurrent state is reset to zeros. 
+  * The first batch of each segment is not used to update the weights (recurrent state warmup).
+  * The hidden state is preserved between batches of sequences within the same segment.
+  * The hidden state is reset to zero when the current `batch_size` segments end.
+
+<!-- TODO: continue from here-->
 
 * **Visualization of predictions:**
   * Model predictions such as lanelines, road edges and path plans are visualized and logged to wandb after a certain interval of iterations, followed by the necessary validation of the trained model. 
@@ -268,3 +246,5 @@ Disclaimer: May be the current version of openpilot Carla is broken. And the bas
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
+
+
