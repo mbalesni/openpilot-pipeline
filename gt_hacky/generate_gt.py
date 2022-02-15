@@ -12,7 +12,7 @@ from pathlib import Path
 import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils import extract_preds, get_segment_dirs, printf, dir_path
+from utils import extract_preds, printf, dir_path
 from train.dataloader import load_transformed_video
 from train.parse_logs import save_segment_calib
 
@@ -117,22 +117,14 @@ if __name__ == '__main__':
     # CPU turns out faster than CUDA with batch size = 1
     model = ort.InferenceSession(args.path_to_model, providers=["CPUExecutionProvider"], sess_options=options)
 
-    printf('Looking for segments...')
-    start_time = time.time()
-    segment_dirs = get_segment_dirs(args.recordings_basedir)
+    # recursive os walk starting at recordings_basedir
+    for dir_path, _, files in tqdm(os.walk(args.recordings_basedir)):
+        if 'video.hevc' not in files and 'fcamera.hevc' not in files:
+            continue
 
-    # shuffle to allow multiple concurrent runs
-    np.random.shuffle(segment_dirs)
-
-    printf(f'\nFound a total of {len(segment_dirs)} segments. {time.time() - start_time:.2f}s \n')
-
-    pbar = tqdm(segment_dirs, desc='Total progress:')
-    for path_to_segment in pbar:
-        start_time = time.time()
-        generate_ground_truth(path_to_segment, model, force=args.force_gt)
-        printf(f'{time.time() - start_time:.2f}s - Generated GT for segment: {path_to_segment} ')
+        generate_ground_truth(dir_path, model, force=args.force_gt)
 
         # TODO: test that this works & uncomment
-        start_time = time.time()
-        save_segment_calib(path_to_segment, args.openpilot_dir, force=args.force_calib)
-        printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
+        save_segment_calib(dir_path, args.openpilot_dir, force=args.force_calib)
+
+        printf()

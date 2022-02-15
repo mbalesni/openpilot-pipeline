@@ -8,6 +8,8 @@ import math
 import numpy as np 
 import h5py
 
+from utils import printf
+
 
 def isRotationMatrix(R) :
     Rt = np.transpose(R)
@@ -38,13 +40,13 @@ def rotationMatrixToEulerAngles(R) :
 
 def parse_logs(path_segment, path_to_openpilot):
     """
-    Create a function that will take the path and gives out the extrinsic and rpy values to be saved in .h5
+    Extract extrinsic matrix and rpy values from raw logs.
     """
     sys.path.append(path_to_openpilot)
     from tools.lib.logreader import LogReader
 
     raw_log = os.path.join(path_segment, 'raw_log.bz2')
-    r_log = os.path.join(path_segment, 'raw_log.bz2')
+    r_log = os.path.join(path_segment, 'rlog.bz2')
     if os.path.exists(raw_log):
         log_file = raw_log
     elif os.path.exists(r_log):
@@ -54,39 +56,57 @@ def parse_logs(path_segment, path_to_openpilot):
 
     frames_per_segment = 1200 # just for completeness; only 1190 are used for training
     
-    msgs = LogReader(log_file)
-    live_calibration_params = [m.liveCalibration for m in msgs if m.which() == 'liveCalibration']
-    length_of_params  = len(live_calibration_params)
-    rpy_segment = np.zeros((frames_per_segment, 3,1))
-    extrinsic_matrix_segment = np.zeros((frames_per_segment, 3,4)) 
-    
-    repeat_n_times = int(np.round(frames_per_segment/length_of_params))
-
-    count = 0
-
-    for it,data in enumerate(live_calibration_params):
+    try:
+        msgs = LogReader(log_file)
+        live_calibration_params = [m.liveCalibration for m in msgs if m.which() == 'liveCalibration']
+        num_calib_updates  = len(live_calibration_params)
+        rpy_segment = np.zeros((frames_per_segment, 3,1))
+        extrinsic_matrix_segment = np.zeros((frames_per_segment, 3,4)) 
         
-        if it == length_of_params-1:
+        repeat_n_times_global = int(np.round(frames_per_segment/num_calib_updates))
 
-            break
-        ext_matrix = np.array(data.extrinsicMatrix).reshape(3,4)
-        rotation_matrix = ext_matrix[:3,:3]
-        
-        cal_rpy_values = rotationMatrixToEulerAngles(rotation_matrix)
-        rpy_calib = np.array(data.rpyCalib)[:, np.newaxis]
+        count = 0
+        count_not_calibrated = 0
 
-        if len(rpy_calib) == 0:
-            count += 1
-            rpy_calib = cal_rpy_values[:, np.newaxis]
+        for it,data in enumerate(live_calibration_params):
+            
+            if it == num_calib_updates-1:
+                break
 
-        st_idx = repeat_n_times * it
-        end_idx = repeat_n_times * (it+1)
-        
-        rep_ext = np.repeat(ext_matrix.reshape(1,3,4), repeat_n_times,  axis=0)        
-        rep_rpy = np.repeat(rpy_calib.reshape(1,3,1), repeat_n_times, axis=0)
+            if data.calStatus != 1:
+                count_not_calibrated += 1
+            
+            ext_matrix = np.array(data.extrinsicMatrix).reshape(3,4)
+            rotation_matrix = ext_matrix[:3,:3]
+            
+            cal_rpy_values = rotationMatrixToEulerAngles(rotation_matrix)
+            rpy_calib = np.array(data.rpyCalib)[:, np.newaxis]
 
-        extrinsic_matrix_segment[st_idx:end_idx, :,:] = rep_ext
-        rpy_segment[st_idx:end_idx,:,:] = rep_rpy 
+            if len(rpy_calib) == 0:
+                count += 1
+                rpy_calib = cal_rpy_values[:, np.newaxis]
+
+            repeat_n_times = min(repeat_n_times_global, frames_per_segment - it)
+
+            rep_ext = np.repeat(ext_matrix.reshape(1,3,4), repeat_n_times,  axis=0)        
+            rep_rpy = np.repeat(rpy_calib.reshape(1,3,1), repeat_n_times, axis=0)
+
+            st_idx = repeat_n_times_global * it
+            end_idx = st_idx + repeat_n_times
+
+            if end_idx > frames_per_segment-1:
+                continue
+
+            extrinsic_matrix_segment[st_idx:end_idx, :,:] = rep_ext
+            rpy_segment[st_idx:end_idx,:,:] = rep_rpy 
+
+        if count_not_calibrated > 0:
+            printf('[WARNING] {}/{} live calibration parameters were not calibrated'.format(count_not_calibrated, num_calib_updates))
+
+    except Exception as err:
+        printf('[ERROR] Could not parse live calibration parameters from {}'.format(log_file))
+        printf(err)
+        return None, None
         
     return rpy_segment, extrinsic_matrix_segment
 
@@ -101,9 +121,15 @@ def save_segment_calib(segment_path, openpilot_dir, force=False):
 
     rpy_Calib, extrinsic_matrix = parse_logs(segment_path, openpilot_dir)
 
+    if rpy_Calib is None or extrinsic_matrix is None:
+        return
+
     with h5py.File(os.path.join(segment_path, "calib.h5"), 'w') as h5file_object:
         h5file_object.create_dataset("rpy", data=rpy_Calib)
         h5file_object.create_dataset("ext_matrix", data=extrinsic_matrix) 
 
 if __name__ == '__main__':
+    # should be used in generate_gt.py.
+    #
+    # but here's example standalone usage
     save_segment_calib('/home/nikita/data/2021-09-19--10-22-59/10', '/home/nikita/openpilot')
