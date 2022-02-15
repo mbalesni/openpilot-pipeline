@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import extract_preds, printf, dir_path
 from train.dataloader import load_transformed_video
-from train.parse_logs import save_segment_calib
+from gt_hacky.parse_logs import save_segment_calib
 
 
 def frames_to_tensor(frames):
