@@ -9,9 +9,10 @@ import os
 import time
 import h5py
 from pathlib import Path
+import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils import extract_preds, get_segment_dirs, printf
+from utils import extract_preds, get_segment_dirs, printf, dir_path
 from train.dataloader import load_transformed_video
 from train.parse_logs import save_segment_calib
 
@@ -96,11 +97,17 @@ def generate_ground_truth(path_to_segment, model, force=False):
 
 
 if __name__ == '__main__':
-    data_dir = sys.argv[1]
-    path_to_openpilot = str(Path.home() / 'openpilot')
-
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path_to_model = os.path.join(parent_dir, 'common/models/supercombo.onnx')
+    default_model_path = os.path.join(parent_dir, 'common/models/supercombo.onnx')
+
+    parser = argparse.ArgumentParser(description='Run the original supercombo model on the dataset and save the predicted path plans.')
+    parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
+    parser.add_argument("--openpilot_dir", type=dir_path, default=str(Path.home() / 'openpilot'), help="path to openpilot directory")
+    parser.add_argument("--path_to_model", default=default_model_path, help="path to model for creating ground truths")
+    parser.add_argument("--force_gt", dest='force_gt', action='store_true', help="path to model for creating ground truths")
+    parser.add_argument("--force_calib", dest='force_calib', action='store_true', help="path to model for creating ground truths")
+    parser.set_defaults(force_gt=False, force_calib=False)
+    args = parser.parse_args()
 
     options = ort.SessionOptions()
     options.intra_op_num_threads = 30
@@ -108,11 +115,11 @@ if __name__ == '__main__':
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
     # CPU turns out faster than CUDA with batch size = 1
-    model = ort.InferenceSession(path_to_model, providers=["CPUExecutionProvider"], sess_options=options)
+    model = ort.InferenceSession(args.path_to_model, providers=["CPUExecutionProvider"], sess_options=options)
 
     printf('Looking for segments...')
     start_time = time.time()
-    segment_dirs = get_segment_dirs(data_dir)
+    segment_dirs = get_segment_dirs(args.recordings_basedir)
 
     # shuffle to allow multiple concurrent runs
     np.random.shuffle(segment_dirs)
@@ -122,12 +129,10 @@ if __name__ == '__main__':
     pbar = tqdm(segment_dirs, desc='Total progress:')
     for path_to_segment in pbar:
         start_time = time.time()
-        generate_ground_truth(path_to_segment, model, force=False)
+        generate_ground_truth(path_to_segment, model, force=args.force_gt)
         printf(f'{time.time() - start_time:.2f}s - Generated GT for segment: {path_to_segment} ')
 
         # TODO: test that this works & uncomment
         start_time = time.time()
-        save_segment_calib(path_to_segment, path_to_openpilot, force=False)
+        save_segment_calib(path_to_segment, args.openpilot_dir, force=args.force_calib)
         printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
-
-

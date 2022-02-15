@@ -7,6 +7,7 @@ import os
 import cv2
 import glob
 import h5py
+import argparse
 #from tools.lib.logreader import LogReader
 
 
@@ -35,6 +36,13 @@ def printf(*args, **kwargs):
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
+
+
+def dir_path(path):
+    if os.path.isdir(path):
+        return path
+    else:
+        raise argparse.ArgumentTypeError(f"readable_dir:{path} is not a valid path")
 
 
 def get_segment_dirs(base_dir, video_names=['video.hevc', 'fcamera.hevc']):
