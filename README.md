@@ -2,7 +2,7 @@
 
 [Openpilot](https://github.com/commaai/openpilot) is the currently leading[^1] Advanced Driver-Assitance System (ADAS), developed & open-sourced by [Comma AI](https://comma.ai/).
 
-This repo attempts to re-create the complete data & training pipeline to allow training custom driving models for Openpilot.
+This repo attempts to re-create the data & training pipeline to allow training custom driving models for Openpilot.
 
 ![compressed-model](https://user-images.githubusercontent.com/25569111/151782155-59a3fe8f-e12e-414b-9f58-1c699924eb1c.gif)
 
@@ -227,14 +227,17 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
     <td><img src="doc/distill_viz.png" ></td>
  </table>
 
-## Technical improvement ToDos
+## Feature Roadmap
 
-**Important**
+- [X] Distillation of original model path planning
+- [ ] True ground truth path creation
+- [ ] Training on true ground truth paths
+
+## Suggested improvements (easy PR!)
+
 - [ ] Use drive calibration info in inputs transformation & for visualization
-- [ ] Do not crash training when a single video failed to read
-
-**Nice to haves**
-- [ ] Better synchronization mechanism to speed up data loader
+- [ ] Fault-tolerant data loader (do not crash training when a single video failed to read)
+- [ ] Speed up data loader via a better synchronization mechanism
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
