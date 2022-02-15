@@ -45,9 +45,14 @@ def parse_logs(path_segment, path_to_openpilot):
 
     raw_log = os.path.join(path_segment, 'raw_log.bz2')
     r_log = os.path.join(path_segment, 'raw_log.bz2')
-    log_file = raw_log if os.path.exists(raw_log) else r_log
+    if os.path.exists(raw_log):
+        log_file = raw_log
+    elif os.path.exists(r_log):
+        log_file = r_log
+    else:
+        raise FileNotFoundError('Could not find raw_log.bz2 or rlog.bz2 in {}'.format(path_segment))
 
-    frames_per_segment = 1200 # anyways we are just taking 1190 for training. 
+    frames_per_segment = 1200 # just for completeness; only 1190 are used for training
     
     msgs = LogReader(log_file)
     live_calibration_params = [m.liveCalibration for m in msgs if m.which() == 'liveCalibration']

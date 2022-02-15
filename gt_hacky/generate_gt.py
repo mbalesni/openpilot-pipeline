@@ -8,12 +8,12 @@ import sys
 import os
 import time
 import h5py
+from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import extract_preds, get_segment_dirs, printf
 from train.dataloader import load_transformed_video
 from train.parse_logs import save_segment_calib
-
 
 
 def frames_to_tensor(frames):
@@ -97,6 +97,7 @@ def generate_ground_truth(path_to_segment, model, force=False):
 
 if __name__ == '__main__':
     data_dir = sys.argv[1]
+    path_to_openpilot = str(Path.home() / 'openpilot')
 
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path_to_model = os.path.join(parent_dir, 'common/models/supercombo.onnx')
@@ -125,8 +126,8 @@ if __name__ == '__main__':
         printf(f'{time.time() - start_time:.2f}s - Generated GT for segment: {path_to_segment} ')
 
         # TODO: test that this works & uncomment
-        # start_time = time.time()
-        # save_segment_calib(path_to_segment, force=False)
-        # printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
+        start_time = time.time()
+        save_segment_calib(path_to_segment, path_to_openpilot, force=False)
+        printf(f'{time.time() - start_time:.2f}s - Saved segment calibration: {path_to_segment} ')
 
 
