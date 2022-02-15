@@ -16,10 +16,12 @@ Right now, the only implemented feature is distillation of path planning *from t
 Below we describe the implemented parts of the pipeline and current training results.
 
 ## Model
-The neural network architecture can be broken down into three parts:
-convolutional feature extractor (based on Resnet), followed by
-a GRU (used to capture the temporal context)
-several fully-connected branches for outputting paths, lane lines, road edges, etc. ( explained in detail below) 
+
+We use the original CommaAI's supercombo model from [Openpilot 0.8.10 release]([Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models). It consists of three parts:
+
+- convolutional feature extractor (based on Resnet), followed by
+- a GRU (used to capture the temporal context)
+- several fully-connected branches for outputting paths, lane lines, road edges, etc. (explained in detail below) 
 
 <table>
   <tr>
@@ -34,43 +36,30 @@ several fully-connected branches for outputting paths, lane lines, road edges, e
   </tr>
  </table>
 
-The model visualized above is `supercombo.onnx` from [Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models). You can find a copy of it in this [repository ](https://github.com/nikebless/openpilot-pipeline/tree/main/common/models). 
+Since Openpilot's repo Git LFS was broken at the time of our development, we kept a [copy](common/models/supercombo.onnx) of the model in our repo for easy access.
 
-Detailed definitions of the inputs and outputs of the model are mentioned [here](https://github.com/commaai/openpilot/tree/master/models). 
+Model inputs and outputs are described in detail in the [official repo](https://github.com/commaai/openpilot/tree/master/models). 
+
 ### Inputs
-As mentioned above, we can divide the model architecture into encoder and decoder. The encoder includes a CNN feature extractor and a GRU, and the decoder is several branches of fully connected layers ending with task-specific outputs. 
 
-The primary input to the model is two consecutive camera frames. They are converted into YUV 4:2:0 format, reprojected, and stacked to form a tensor of shape `(N,12,128,256)`.
-* ##### YUV 4:2:0
-  * It is a color subsampling technique.
-  * Encodes only 20% of the color infromation.
-  * Saves memory footprint
-  * Computationally efficient. 
+The primary input to the model is two consecutive camera frames, converted into YUV420 format (good description [here](https://github.com/peter-popov/unhack-openpilot#image-preprocessing)), reprojected and stacked into a tensor of shape `(N,12,128,256)`.
 
-Three other model inputs are fed after the convolutional extractor as input for the GRU: desire, traffic convention, and recurrent state. 
+Three other model inputs fed after the convolutional extractor into the GRU are: 
 
-* ##### Desire
-  Desire is a one-hot vector of shape `(N,8`). It is used to condition the model for specific actions:
-
-    ![desire](doc/desire.png?raw=true)
-    
-  The class above is from the [logs classes definition file](https://github.com/commaai/cereal/blob/5c64eaab789dfa67a210deaa2530788843474999/log.capnp#L894-L902). 
-
-* ##### Traffic Convention
-  * Traffic convention is a one-hot vector of shape `(N,2)`, conditioning the model with the local driving side convention (left-hand or right-hand).
-
-* ##### Recurrent State
-  * GRU memory of shape `(N,512)`. 
+- desire `(N,8)`
+- traffic convention `(N,2)`
+- recurrent state `(N,512)`
 
 ### Outputs
-The outputs from the task-specific branches are concatenated, resulting in the model output of shape `(N,6472)`.
-The code to manually parse the outputs can be found in the older versions of the [openpilot](https://github.com/commaai/openpilot/blob/v0.8.9/selfdrive/modeld/models/driving.cc#L15-L49). Most outputs are predicted in the form of mean and standard deviation over time. Path plans, lane lines, road edges, etc are predicted for 33 timestamps [quadratically spaced out](https://github.com/commaai/openpilot/blob/7d3ad941bc4ba4c923af7a1d7b48544bfc0d3e13/selfdrive/common/modeldata.h#L14-L25) for 10 seconds or 192 meters from the current position. These predictions are in the so-called calibrated frame of reference, explained in detail [here](https://github.com/commaai/openpilot/tree/master/common/transformations).
+The outputs from the task-specific branches are concatenated, resulting in the model output of shape `(N,6472)`. We took the code for parsing the outputs from an [older version](https://github.com/commaai/openpilot/blob/v0.8.9/selfdrive/modeld/models/driving.cc#L15-L49) of Openpilot.
 
-Comma explain model outputs in the [Openpilot model readme](https://github.com/commaai/openpilot/tree/7d3ad941bc4ba4c923af7a1d7b48544bfc0d3e13/models).
+Most outputs are predicted in the form of mean and standard deviation over time. Path plans, lane lines, road edges, etc are predicted for 33 timestamps [quadratically spaced out](https://github.com/commaai/openpilot/blob/7d3ad941bc4ba4c923af7a1d7b48544bfc0d3e13/selfdrive/common/modeldata.h#L14-L25) for 10 seconds or 192 meters from the current position. These predictions are in the so-called calibrated frame of reference, explained in detail [here](https://github.com/commaai/openpilot/tree/master/common/transformations).
+
+Further details on model outputs is in the [model readme](https://github.com/commaai/openpilot/tree/7d3ad941bc4ba4c923af7a1d7b48544bfc0d3e13/models).
 
 ### Converting the model from ONNX to PyTorch
 
-To fine-tune an existing driving model, we convert it from the ONNX format to PyTorch using [onnx2pytorch](https://github.com/ToriML/onnx2pytorch). Note: there is a bug in onnx2pytorch that impacts the outputs; until this [PR](https://github.com/ToriML/onnx2pytorch/pull/38) is merged, a [manual fix](https://github.com/nikebless/openpilot-pipeline/blob/main/train/model.py#L28-L29) is necessary.
+To fine-tune an existing driving model, we convert it from the ONNX format to PyTorch using [onnx2pytorch](https://github.com/ToriML/onnx2pytorch). Note: there is a bug in onnx2pytorch that impacts the outputs; until this [PR](https://github.com/ToriML/onnx2pytorch/pull/38) is merged, we must manually set activation functions to be [*not* in-place](https://github.com/nikebless/openpilot-pipeline/blob/main/train/model.py#L28-L29).
 
 ### Loss functions
 
@@ -91,52 +80,45 @@ For the dataset, we use [comma2k19](https://github.com/commaai/comma2k19), a 33-
 
 > The data was collected using comma EONs that has sensors similar to those of any modern smartphone including a road-facing camera, phone GPS, thermometers and 9-axis IMU. Additionally, the EON captures raw GNSS measurements and all CAN data sent by the car."
 
-To use your data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future, when true ground truth creation is implemented, you *might* be able to use a different device. Still, you'll need to adjust some hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc). If you need more data than you can store on the device or Comma cloud or want to do it at scale, you can use a custom cloud server that re-implements Comma's API, called [retropilot-server](https://github.com/florianbrede-ayet/retropilot-server).
+To use your data for training, you currently need to collect it with a [Comma 2 device](https://comma.ai/shop/products/two) (no support for version 3 yet). In the future, when true ground truth creation is implemented, you *might* be able to use a different device. Still, you'll need to adjust some hardware-related code (camera intrinsics, GNSS configuration in laika post-processing, etc). If you need more data than you can store on the device or Comma cloud or want to do it at scale, you can use [retropilot-server](https://github.com/florianbrede-ayet/retropilot-server), a custom cloud server that re-implements Comma's API.
 
 
 ## Training pipeline
 
 ### Training loop
 
-
 * **General:** 
   * Recurrent state of the GRU and desire are intialized with zeros. 
   * Traffic convention is hard-coded for left-hand-side driving.
   * A batch consists of `batch_size` sequences of length `seq_len` each from a different one-minute driving segment to reduce data correlation.
+  
 
 * **GRU training Logic:**
   * The first batch of each segment is not used to update the weights (recurrent state warmup).
   * The hidden state is preserved between batches of sequences within the same segment.
   * The hidden state is reset to zero when the current `batch_size` segments end.
-
-<!-- TODO: continue from here-->
-
-* **Visualization of predictions:**
-  * Model predictions such as lanelines, road edges and path plans are visualized and logged to wandb after a certain interval of iterations, followed by the necessary validation of the trained model. 
-  * To validate the predictions qualitatively we have also visualized the groundtruth.
-  * Same Segments are used to visualize the model predictions and groundtruth. 
-  * One segment from training set and one from validation set is used for visualization.
+ 
 
 * **Wandb**
-  * All the hyperparams, loss metrics and time taken by different modules of the training are logged and visualized in wandb.
-
+  * All the hyperparameters, loss metrics, and time taken by different training components are logged and visualized in Wandb.
+  * For each validation loop, predictions vs ground truth are visualized on Wandb for the same one training and one validation segment.
 
 
 ### Data loading
 
-In our preliminary experiments, we found that having more driving segments per batch is crucial for training. Batch size 8 (8 different segments per batch) leads to overfitting, while batch size 28 (maximum we could fit on our machine) gives a good performance.
+Our preliminary experiments showed that having more driving segments per batch is crucial for convergence. Batch size 8 (each batch has sequences from 8 different segments) leads to overfitting, while batch size 28 (maximum we could fit on our machine) results in a good performance.
 
-PyTorch supports parallel batch loading *but not parallel sample loading*, so we implemented a custom data loader where each worker loads a single segment at a time, and a separate background process combines the results into a single batch. This is paired with pre-fetching and a (super hacky) synchronization mechanism to ensure the collation process doesn't block the shared memory until the main process has received the batch. 
+PyTorch multi-worker data loader does not support parallel *sample* loading, which is necessary for creating batches of sequences from different segments. We implemented a custom data loader where each worker loads a single segment at a time, and a separate background process combines the results into a single batch. We also implement pre-fetching and a (super hacky) synchronization mechanism to ensure the collation process doesn't block the shared memory until the main process has received the batch. 
 
-Altogether this results in relatively low latency: ~150ms waiting + ~175ms transfer to GPU on our machine. Inter-process messaging instead of the hacky sync mechanism might bring the waiting down to <10ms. Speeding up transfer to GPU might be done through memory pinning, but it didn't work when I tried pinning tensors before pushing them to the shared memory queue. It probably has to be done on the consumer process side, but I am not sure how to keep it from slowing down the rest of the pipeline.
+Altogether this results in relatively low latency: ~150ms waiting + ~175ms transfer to GPU on our machine. Instead of the hacky sync mechanism, inter-process messaging might bring the waiting down to <10ms. Speeding up transfer to GPU might be done through memory pinning, but it didn't work when we tried pinning tensors before pushing them to the shared memory queue. It probably has to be done on the consumer process side, but we are not sure how to keep it from slowing down the rest of the pipeline.
 
-**NOTE:** The data loader requires *two CPU-cores (one train, one validation) per unit of batch size*, plus additional two CPU-cores for the main and background (collation) processes. Per-unit-of-batch-size cost could be brought down to 1 CPU-core if we implement stopping/restarting the train/validation workers as needed.
+**NOTE:** The data loader requires *two CPU cores (one train, one validation) per unit of batch size*, plus additional two CPU cores for the main and background (collation) processes. The per-unit-of-batch-size cost could be brought down to 1 CPU-core if we implement stopping/restarting the train/validation workers as needed.
 
 ## How to Use
 
 ### System Requirements
 
-- Ubuntu 20.04 LTS **with sudo** for compiling openpilot & ground truth creation. Training can probably be done on any Linux machine where PyTorch is supported.
+- Ubuntu 20.04 LTS **with sudo** for compiling openpilot & ground truth creation. You can probably run training on any Linux machine where PyTorch is supported.
 - 50+ CPU cores, but more (~128-256) would mean better GPU utilization.
 - GPU with at least 6 GB of memory.
 
@@ -157,7 +139,7 @@ conda env create -f environment.yml
 
 ### Run
 
-1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. Either from comma2k19, or from your own collected data, as explained in the [data pipeline](#data-pipeline).
+1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. You can use comma2k19 or your own collected data, as explained in the [data pipeline](#data-pipeline).
 2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
 3. Set up [wandb](https://docs.wandb.ai/quickstart)
 4. Run Training
@@ -166,51 +148,58 @@ conda env create -f environment.yml
   sbatch train.sh --date_it <iteration_name> --recordings_basedir <dataset_dir>
   ```
 
-* via slurm script
+* directly
   ```bash
   python train.py --date_it <iteration_name> --recordings_basedir <dataset_dir>
   ```
-The only required parameter are `--date_it` and `--recordings_basedir`, by running the above commands the default params will be used. If in case you want to alter the params. Detailed description of the parameters:
+The only required parameters are `--date_it` and `--recordings_basedir`. Other parameters description of the parameters:
 
-* `--batch_size` - batch size is equal to the number of workers used by dataloader. It should be decided depending on the number of cores of cpu available at the time of training. Currently we have tested the dataloder until batch size `28`. 
-* `--date_it` - name of the training iteration.
-* `--epochs` - number of epochs for training, default is 15
-* `--grad_clip` - enable gradient clipping, default is infinity.
-* `--l2_lambda` - weight decay value used in the adam optimizer, default is 1e-4.
-* `--log_frequency` - after how many iterations you want to log the train loss to wandb and show it in the output, default is 100.
-* `--lr` - learning rate, deafult is 0.001
-* `--lrs_factor` - factor by which the learning rate is reduced by the scheduler, deafult is 0.75 
-* `--lrs_min` - a lower bound on the learning rate for scheduler, default is 1e-6
-* `--lrs_patience` - number of epochs with no improvement when learning rate is reduced by scheduler, default is 3
-* `--lrs_thresh` - threshold for measuring new optimum by scheduler, default is 1e-4
-* `--mhp_loss` - enable the multi hypothesis loss for training paths, by default distillation loss is enabled.
-* `--no_recurr_warmup` - to enable the recurrent warmup False, by default it is True. 
-* `--no_wandb` - disable the wandb logging, by default it is always on.
-* `--recordings_basedir` - recordings or dataset path, default is our reccordings path.
-* `--seed` - for the model reproducibility, default is 42
-* `--seq_len` - length of sequence fetched by the dataloader for a batch, default is 100.
-* `--split` - training and validation dataset split, default is 0.94
-* `--val_frequency` - after how many iterations you want to enable the visulization of predictions by the trained model and validation.
+* `--batch_size` - maximum batch size should be no more than half of the number of available CPU cores, minus two. Currently, we have tested the data loader until batch size `28` (maximum for 60 cores).
+* `--date_it` - the name of the training run for Wandb.
+* `--epochs` - number of epochs for training, default is `15`.
+* `--grad_clip` - gradient clipping norm, default is `inf` (no clipping).
+* `--l2_lambda` - weight decay value used in the adam optimizer, default is `1e-4`.
+* `--log_frequency` - after how many iterations you want to log the training loss to Wandb and show it in the output, default is `100`.
+* `--lr` - learning rate, deafult is `1e-3`
+* `--lrs_factor` - factor by which the scheduler reduces the learning rate, default is `0.75 `
+* `--lrs_min` - minimum learning rate, default is `1e-6`
+* `--lrs_patience` - number of epochs with no improvement when the learning rate is reduced by the scheduler, default is `3`
+* `--lrs_thresh` - sensitivity of the learning rate scheduler, default is `1e-4`
+* `--mhp_loss` - use the multi hypothesis laplacian loss. By default, `KL-divergence`-based loss is used.
+* `--no_recurr_warmup` - disable recurrent warmup. Enabled by default. 
+* `--no_wandb` - disable Wandb logging. Enabled by default.
+* `--recordings_basedir` - path to the recordings root directory.
+* `--seed` - for the model reproducibility. The default is `42`.
+* `--seq_len` - length of sequences within each batch. Default is `100`.
+* `--split` - training dataset proportion. The rest goes to validation; no test set is used. Default is `0.94`.
+* `--val_frequency` - validation loop runs after this many batches. Default is `400`.
+
 ### Using the model
-
 
 0. Convert the model to ONNX format
 ```bash
 cd train
 python torch_to_onnx.py <model_path>
 ```
-1. In simulation (Carla)
+1. In a simulation (Carla)
+
+> **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, you can try updating the `start_openpilot_docker.sh` script with a tag from an older docker container version from the [history](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/versions?filters%5Bversion_type%5D=untagged).
+
+<!-- TODO: add exact versions that worked for us -->
+
+
 * Make sure that you have installed [openpilot](https://github.com/commaai/openpilot/tree/master/tools). 
-* Make sure that cuda drivers are installed properly (`nvidia-smi` is available) 
+* Make sure that CUDA drivers are installed properly (e.g. `nvidia-smi` is available) 
 * Go to the sim folder in cloned openpilot repo. 
   ```bash
   cd openpilot/tools/sim 
   ```
 * Add your model in `openpilot/models` and rename it to `supercombo.onnx`.
-* After that you need to edit the script [start_openpilot_docker.sh](https://github.com/commaai/openpilot/blob/master/tools/sim/start_openpilot_docker.sh), and add a bind mount at the end of the `docker run` command specifying the source and target path for the docker container.
+* Mount the models directory into the container at the end of the `docker run` command in the script [start_openpilot_docker.sh](https://github.com/commaai/openpilot/blob/master/tools/sim/start_openpilot_docker.sh) by adding:
 ```
-Disclaimer: May be the current version of openpilot Carla is broken. And the bash script always pull the latest version of sim. So you can go back in the history (https://github.com/commaai/openpilot/pkgs/container/openpilot-sim)  and based on timeline of working commits change the tag in the docker run command in the script.
+--mount type=bind,source=”$(HOME)/openpilot/models”,target=”/openpilot/models”
 ```
+
 * Open two separate terminals and execute these bash scripts. 
   ```bash
   cd openpilot/tools/sim 
@@ -219,15 +208,19 @@ Disclaimer: May be the current version of openpilot Carla is broken. And the bas
   
   ./start_openpilot_docker.sh
   ```
-2. In your car (via the Comma 2 device) — [Convert to DLC](doc/ONNX_to_DLC.md), where as comma 3 supports onnx.
+2. In your car (via the Comma 2 device)
+
+  * [Convert to DLC](doc/ONNX_to_DLC.md)
+  * Replace the original model on the device via SSH
 
 ## Our Results
 
-* Visualization of the results via model trained with MHP (Multi-hypothesis loss) and KL divergence (Distillation). 
+So far, the Likelihood loss worked much better, resulting in faster convergence than KL divergence (unintuitively):
+
 <table>
   <tr>
     <td>Likelihood model (~1h of training) </td>
-     <td>Distillation model (~20h of training)</td>
+     <td>KL divergence model (~20h of training)</td>
   </tr>
   <tr>
     <td><img src="doc/MHP_vis.png" ></td>
@@ -235,7 +228,6 @@ Disclaimer: May be the current version of openpilot Carla is broken. And the bas
  </table>
 
 ## Technical improvement ToDos
-
 
 **Important**
 - [ ] Use drive calibration info in inputs transformation & for visualization
@@ -246,5 +238,7 @@ Disclaimer: May be the current version of openpilot Carla is broken. And the bas
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
+
+
 
 
