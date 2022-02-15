@@ -145,12 +145,12 @@ conda env create -f environment.yml
 4. Run Training
 * via slurm script
   ```bash
-  sbatch train.sh --date_it <iteration_name> --recordings_basedir <dataset_dir>
+  sbatch train.sh --date_it <run_name> --recordings_basedir <dataset_dir>
   ```
 
 * directly
   ```bash
-  python train.py --date_it <iteration_name> --recordings_basedir <dataset_dir>
+  python train.py --date_it <run_name> --recordings_basedir <dataset_dir>
   ```
 The only required parameters are `--date_it` and `--recordings_basedir`. Other parameters description of the parameters:
 
@@ -159,7 +159,7 @@ The only required parameters are `--date_it` and `--recordings_basedir`. Other p
 * `--epochs` - number of epochs for training, default is `15`.
 * `--grad_clip` - gradient clipping norm, default is `inf` (no clipping).
 * `--l2_lambda` - weight decay value used in the adam optimizer, default is `1e-4`.
-* `--log_frequency` - after how many iterations you want to log the training loss to Wandb and show it in the output, default is `100`.
+* `--log_frequency` - after every how many training batches you want to log the training loss to Wandb, default is `100`.
 * `--lr` - learning rate, deafult is `1e-3`
 * `--lrs_factor` - factor by which the scheduler reduces the learning rate, default is `0.75 `
 * `--lrs_min` - minimum learning rate, default is `1e-6`
@@ -238,7 +238,4 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
-
-
-
 
