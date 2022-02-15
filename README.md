@@ -9,11 +9,13 @@ This repo attempts to re-create the data & training pipeline to allow training c
 
 ## About
 
-The project is *in early development*. The ultimate goal is to create a codebase for training end-to-end autonomous driving models.
+The project is *in early development*. The ultimate goal is to create a community codebase for training end-to-end autonomous driving models.
 
 Right now, the only implemented feature is distillation of path planning *from the original Openpilot driving model*. To train from scratch, we need to implement the creation of accurate ground truth paths by processing data from cars' GNSS, IMU, and visual odometry with [laika](https://github.com/commaai/laika) and [rednose](https://github.com/commaai/rednose) (PRs welcome!).
 
 Below we describe the implemented parts of the pipeline and current training results.
+
+In the end, we list [suggested improvements](#suggested-improvements-easy-pr) that could be easy PRs (be quick before they're out!).
 
 ## Model
 
@@ -235,9 +237,11 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
 
 ## Suggested improvements (easy PR!)
 
-- [ ] Use drive calibration info in inputs transformation & for visualization
+- [ ] Use drive calibration info from each segment for input transformation & predictions visualization
+- [ ] Filter out segments where the car is not moving. A camera-based detection method is already [implemented](gt_hacky/detect_moving_camera.py) (untested)
 - [ ] Fault-tolerant data loader (do not crash training when a single video failed to read)
 - [ ] Speed up data loader via a better synchronization mechanism
+- [ ] Move to PyTorch Lightning for better maintainability
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
