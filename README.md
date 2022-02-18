@@ -9,15 +9,17 @@ This repo attempts to re-create the data & training pipeline to allow training c
 
 ## About
 
-The project is *in early development*. The ultimate goal is to create a codebase for training end-to-end autonomous driving models.
+The project is *in early development*. The ultimate goal is to create a community codebase for training end-to-end autonomous driving models.
 
 Right now, the only implemented feature is distillation of path planning *from the original Openpilot driving model*. To train from scratch, we need to implement the creation of accurate ground truth paths by processing data from cars' GNSS, IMU, and visual odometry with [laika](https://github.com/commaai/laika) and [rednose](https://github.com/commaai/rednose) (PRs welcome!).
 
 Below we describe the implemented parts of the pipeline and current training results.
 
+In the end, we list [suggested improvements](#suggested-improvements-easy-pr) that could be easy PRs (be quick before they're out!).
+
 ## Model
 
-We use the original CommaAI's supercombo model from [Openpilot 0.8.10 release]([Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models). It consists of three parts:
+We currently fine-tune the original CommaAI's supercombo model from [Openpilot 0.8.11 release](https://github.com/commaai/openpilot/tree/v0.8.11/models). It consists of three parts:
 
 - convolutional feature extractor (based on Resnet), followed by
 - a GRU (used to capture the temporal context)
@@ -39,6 +41,8 @@ We use the original CommaAI's supercombo model from [Openpilot 0.8.10 release]([
 Since Openpilot's repo Git LFS was broken at the time of our development, we kept a [copy](common/models/supercombo.onnx) of the model in our repo for easy access.
 
 Model inputs and outputs are described in detail in the [official repo](https://github.com/commaai/openpilot/tree/master/models). 
+
+> **Note:** ONNX models are only available in the non-release branches, so we had to look for the right ONNX model by comparing the hashes of the corresponding DLC models to the one in desired release.
 
 ### Inputs
 
@@ -183,7 +187,7 @@ python torch_to_onnx.py <model_path>
 ```
 1. In a simulation (Carla)
 
-> **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, you can try updating the `start_openpilot_docker.sh` script with a tag from an older docker container version from the [history](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/versions?filters%5Bversion_type%5D=untagged).
+> **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, try using [Openpilot v0.8.11](https://github.com/commaai/openpilot/releases/tag/v0.8.11) and [this version](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/11945846) of the docker container. To do the latter, you will need to update the `start_openpilot_docker.sh` script with that version's SHA256 hash.
 
 <!-- TODO: add exact versions that worked for us -->
 
@@ -226,6 +230,8 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
     <td><img src="doc/MHP_vis.png" ></td>
     <td><img src="doc/distill_viz.png" ></td>
  </table>
+ 
+ The short CARLA gif at the top of the README is the Likelihood model.
 
 ## Feature Roadmap
 
@@ -235,9 +241,12 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
 
 ## Suggested improvements (easy PR!)
 
-- [ ] Use drive calibration info in inputs transformation & for visualization
+- [ ] Use drive calibration info from each segment for input transformation & predictions visualization
+- [ ] Filter out segments where the car is not moving. A camera-based detection method is already [implemented](gt_hacky/detect_moving_camera.py) (untested)
 - [ ] Fault-tolerant data loader (do not crash training when a single video failed to read)
 - [ ] Speed up data loader via a better synchronization mechanism
+- [ ] Kill & restart (remembering the state) train/validation data loaders to reduce CPU-per-unit-of-batch-size cost
+- [ ] Move to PyTorch Lightning for better maintainability
 
 
 [^1]: Top 1 Overall Ratings, [2020 Consumer Reports](https://data.consumerreports.org/wp-content/uploads/2020/11/consumer-reports-active-driving-assistance-systems-november-16-2020.pdf)
