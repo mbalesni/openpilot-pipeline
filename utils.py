@@ -11,6 +11,7 @@ import argparse
 #from tools.lib.logreader import LogReader
 
 
+PATH_TO_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
 FULL_FRAME_SIZE = (1164, 874)
 W, H = FULL_FRAME_SIZE[0], FULL_FRAME_SIZE[1]
 eon_focal_length = FOCAL = 910.0

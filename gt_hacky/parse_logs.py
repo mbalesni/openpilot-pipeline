@@ -43,20 +43,20 @@ def parse_logs(path_segment, path_to_openpilot):
     Extract extrinsic matrix and rpy values from raw logs.
     """
     sys.path.append(path_to_openpilot)
-    from tools.lib.logreader import LogReader
-
-    raw_log = os.path.join(path_segment, 'raw_log.bz2')
-    r_log = os.path.join(path_segment, 'rlog.bz2')
-    if os.path.exists(raw_log):
-        log_file = raw_log
-    elif os.path.exists(r_log):
-        log_file = r_log
-    else:
-        raise FileNotFoundError('Could not find raw_log.bz2 or rlog.bz2 in {}'.format(path_segment))
-
     frames_per_segment = 1200 # just for completeness; only 1190 are used for training
     
     try:
+        from tools.lib.logreader import LogReader
+
+        raw_log = os.path.join(path_segment, 'raw_log.bz2')
+        r_log = os.path.join(path_segment, 'rlog.bz2')
+        if os.path.exists(raw_log):
+            log_file = raw_log
+        elif os.path.exists(r_log):
+            log_file = r_log
+        else:
+            raise FileNotFoundError('Could not find raw_log.bz2 or rlog.bz2 in {}'.format(path_segment))
+
         msgs = LogReader(log_file)
         live_calibration_params = [m.liveCalibration for m in msgs if m.which() == 'liveCalibration']
         num_calib_updates  = len(live_calibration_params)
@@ -104,7 +104,7 @@ def parse_logs(path_segment, path_to_openpilot):
             printf('[WARNING] {}/{} live calibration parameters were not calibrated'.format(count_not_calibrated, num_calib_updates))
 
     except Exception as err:
-        printf('[ERROR] Could not parse live calibration parameters from {}'.format(log_file))
+        printf('[ERROR] Could not parse live calibration parameters from {}'.format(path_segment))
         printf(err)
         return None, None
         

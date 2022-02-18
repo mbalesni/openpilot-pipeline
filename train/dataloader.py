@@ -21,14 +21,13 @@ from torch import multiprocessing
 import subprocess
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa
-from utils import bgr_to_yuv, transform_frames, printf, FULL_FRAME_SIZE, create_image_canvas  # noqa
+from utils import bgr_to_yuv, transform_frames, printf, FULL_FRAME_SIZE, create_image_canvas, PATH_TO_CACHE  # noqa
 
 
 MIN_SEGMENT_LENGTH = 1190
 
-cache_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
-path_to_videos_cache = os.path.join(cache_folder, 'videos.txt')
-path_to_plans_cache = os.path.join(cache_folder, 'plans.txt')
+path_to_videos_cache = os.path.join(PATH_TO_CACHE, 'videos.txt')
+path_to_plans_cache = os.path.join(PATH_TO_CACHE, 'plans.txt')
 
 
 def load_transformed_video(path_to_segment, plot_img_width=640, plot_img_height=480, seq_len=1190):
@@ -275,7 +274,7 @@ class CommaDataset(IterableDataset):
     def get_paths(self, base_dir, min_segment_len=1190):
         '''Get paths to videos and ground truths. Cache them for future reuse.'''
 
-        os.makedirs(cache_folder, exist_ok=True)
+        os.makedirs(PATH_TO_CACHE, exist_ok=True)
 
         if os.path.exists(path_to_videos_cache) and os.path.exists(path_to_plans_cache):
             printf('Using cached paths to videos and GTs...')
@@ -284,14 +283,9 @@ class CommaDataset(IterableDataset):
             with open(path_to_videos_cache, 'r') as f:
                 video_paths = f.read().splitlines()
 
-                ### for overfitting test
-                # video_paths = video_paths[0]
-
             with open(path_to_plans_cache, 'r') as f:
                 gt_paths = f.read().splitlines()
                 
-                ### for overfitting test
-                # gt_paths = gt_paths[0] #taking only one segment
         else:
             printf('Resolving paths to videos and GTs...')
             segment_dirs = self.get_segment_dirs(base_dir)

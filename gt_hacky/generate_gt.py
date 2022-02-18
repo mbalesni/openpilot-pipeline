@@ -12,7 +12,7 @@ from pathlib import Path
 import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils import extract_preds, printf, dir_path
+from utils import extract_preds, printf, dir_path, PATH_TO_CACHE
 from train.dataloader import load_transformed_video
 from gt_hacky.parse_logs import save_segment_calib
 
@@ -101,6 +101,7 @@ if __name__ == '__main__':
     default_model_path = os.path.join(parent_dir, 'common/models/supercombo.onnx')
 
     parser = argparse.ArgumentParser(description='Run the original supercombo model on the dataset and save the predicted path plans.')
+    parser.add_argument("--cache", default=str(Path(PATH_TO_CACHE) / 'segments.txt'), help="path to cache file that stores the paths to the segments")
     parser.add_argument("--recordings_basedir", type=dir_path, default="/gpfs/space/projects/Bolt/comma_recordings", help="path to base directory with recordings")
     parser.add_argument("--openpilot_dir", type=dir_path, default=str(Path.home() / 'openpilot'), help="path to openpilot directory")
     parser.add_argument("--path_to_model", default=default_model_path, help="path to model for creating ground truths")
@@ -117,14 +118,27 @@ if __name__ == '__main__':
     # CPU turns out faster than CUDA with batch size = 1
     model = ort.InferenceSession(args.path_to_model, providers=["CPUExecutionProvider"], sess_options=options)
 
-    # recursive os walk starting at recordings_basedir
-    for dir_path, _, files in tqdm(os.walk(args.recordings_basedir)):
-        if 'video.hevc' not in files and 'fcamera.hevc' not in files:
-            continue
+    if os.path.exists(args.cache):
+        printf('Using cached segment directories...')
+        with open(args.cache, 'r') as f:
+            segments = [line.strip() for line in f.readlines()]
+    else:
+        printf('Finding segment directories...')
+        os.makedirs(PATH_TO_CACHE, exist_ok=True)
+        with open(args.cache, 'a+') as f:
+            pbar = tqdm()
+            for dir_path, _, files in os.walk(args.recordings_basedir):
+                if 'video.hevc' not in files and 'fcamera.hevc' not in files:
+                    continue
 
+                pbar.update(1)
+
+                f.write(dir_path + '\n')
+        
+    printf('Generating ground truths...')
+    for dir_path in tqdm(segments):
+        printf('dir_path:', dir_path)
         generate_ground_truth(dir_path, model, force=args.force_gt)
-
-        # TODO: test that this works & uncomment
         save_segment_calib(dir_path, args.openpilot_dir, force=args.force_calib)
 
         printf()

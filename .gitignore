@@ -6,3 +6,5 @@ train/nets
 core.*
 .env
 train/tmp
+cache
+nohup.out
