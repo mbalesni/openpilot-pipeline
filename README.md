@@ -189,8 +189,6 @@ python torch_to_onnx.py <model_path>
 
 > **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, try using [Openpilot v0.8.11](https://github.com/commaai/openpilot/releases/tag/v0.8.11) and [this version](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/11945846) of the docker container. To do the latter, you will need to update the `start_openpilot_docker.sh` script with that version's SHA256 hash.
 
-<!-- TODO: add exact versions that worked for us -->
-
 
 * Make sure that you have installed [openpilot](https://github.com/commaai/openpilot/tree/master/tools). 
 * Make sure that CUDA drivers are installed properly (e.g. `nvidia-smi` is available) 

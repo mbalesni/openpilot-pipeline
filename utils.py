@@ -177,9 +177,6 @@ def extract_preds(outputs, best_plan_only=True):
 
     result_batch = []
 
-    # TODO: update visualization accordingly
-    # make the output a bit more readable
-    # each element of the output list is a tuple of predictions at respective sample_idx
     for i in range(batch_size):
         lanelines = [outer_left_lane[i], inner_left_lane[i], inner_right_lane[i], outer_right_lane[i]]
         lanelines_probs = [outer_left_prob[i], inner_left_prob[i], inner_right_prob[i], outer_right_prob[i]]
@@ -448,37 +445,3 @@ def draw_path(lane_lines, road_edges, path_plan, img_plot, calibration, lane_lin
     img_plot = cv2.addWeighted(overlay, alpha, img_plot, 1 - alpha, 0)
 
     return img_plot
-
-
-def get_train_imgs(path_to_segment, video_file='fcamera.hevc', gt_file='ground_truths.npz'):
-    '''Return pre-processed (not-yet-stacked) frames from a segment video.
-
-    return: (N, 6, 128, 256)
-
-    `N` is determined by the number of ground truth poses for the segment.
-
-    TODO: Should we add -1? Since the first ground truth pose is computed 
-    before we have 2 frames — so we should discard the first ground truth.
-    Not sure about how ground truth poses are aligned with frames tho.
-    '''
-
-    input_video = os.path.join(path_to_segment, video_file)
-    ground_truths_file = os.path.join(path_to_segment, gt_file)
-
-    #if not os.path.exists(ground_truths_file):
-    #    raise FileNotFoundError('Segment ground truths NOT FOUND: {}'.format(path_to_segment))
-
-    #ground_truths = np.load(ground_truths_file)
-    #n_inputs_necessary = ground_truths['plan'].shape[0] # TODO: should we add -1 here?
-
-    yuv_frames = load_frames(input_video)
-    prepared_frames = transform_frames(yuv_frames) # NOTE: should NOT be normalized
-
-    # example of how to get stacked frames
-    #
-    # train_imgs = np.zeros((n_inputs_necessary, 12, 128, 256))
-    # for i in range(n_inputs_necessary):
-    #     stacked_frames = np.vstack(prepared_frames[i:i+2])[None] # (12, 128, 256)
-    #     train_imgs[i] = stacked_frames
-
-    return prepared_frames#[:n_inputs_necessary]
