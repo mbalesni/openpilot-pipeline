@@ -268,8 +268,14 @@ class CommaDataset(IterableDataset):
     def get_segment_dirs(self, base_dir, gt_file_name='gt_hacky.h5'):
         '''Get paths to segments that have ground truths.'''
 
-        gt_files = sorted(glob.glob(base_dir + f'/**/{gt_file_name}', recursive=True))
-        return sorted(list(set([os.path.dirname(f) for f in gt_files])))
+        if os.path.exists(segments_cache := os.path.join(PATH_TO_CACHE, 'segments.txt')):
+            with open(segments_cache, 'r') as f:
+                segment_dirs = [line.strip() for line in f.readlines()]
+        else:
+            gt_files = sorted(glob.glob(base_dir + f'/**/{gt_file_name}', recursive=True))
+            segment_dirs = sorted(list(set([os.path.dirname(f) for f in gt_files])))
+
+        return segment_dirs
 
     def get_paths(self, base_dir, min_segment_len=1190):
         '''Get paths to videos and ground truths. Cache them for future reuse.'''
@@ -291,10 +297,8 @@ class CommaDataset(IterableDataset):
             segment_dirs = self.get_segment_dirs(base_dir)
 
             # prevent duplicate writes
-            with open(path_to_videos_cache, 'w') as video_paths:
-                pass
-            with open(path_to_plans_cache, 'w') as gt_paths:
-                pass
+            with open(path_to_videos_cache, 'w'): pass
+            with open(path_to_plans_cache, 'w'): pass
 
             gt_filename = 'gt_hacky.h5'
             video_filenames = ['fcamera.hevc', 'video.hevc']
