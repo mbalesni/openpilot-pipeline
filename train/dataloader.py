@@ -265,7 +265,7 @@ class CommaDataset(IterableDataset):
             segment_gts.close()
             segment_video.release()
 
-    def get_segment_dirs(self, base_dir, gt_file_name='gt_hacky.h5'):
+    def get_segment_dirs(self, base_dir, gt_file_name='gt_distill.h5'):
         '''Get paths to segments that have ground truths.'''
 
         if os.path.exists(segments_cache := os.path.join(PATH_TO_CACHE, 'segments.txt')):
@@ -300,7 +300,7 @@ class CommaDataset(IterableDataset):
             with open(path_to_videos_cache, 'w'): pass
             with open(path_to_plans_cache, 'w'): pass
 
-            gt_filename = 'gt_hacky.h5'
+            gt_filename = 'gt_distill.h5'
             video_filenames = ['fcamera.hevc', 'video.hevc']
 
             video_paths = []

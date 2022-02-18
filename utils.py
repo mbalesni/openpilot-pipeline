@@ -58,7 +58,7 @@ def get_segment_dirs(base_dir, video_names=['video.hevc', 'fcamera.hevc']):
 
 def load_h5(seg_path):
 
-    file_path = os.path.join(seg_path, 'gt_hacky.h5')
+    file_path = os.path.join(seg_path, 'gt_distill.h5')
     print(os.path.exists(file_path))
     file = h5py.File(file_path,'r')
 

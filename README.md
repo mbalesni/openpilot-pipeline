@@ -72,7 +72,7 @@ The latter one works much better, and the code for it was shared with us by folk
 
 ## Data pipeline
 
-A script in `gt_hacky` runs the official Openpilot model on the full dataset and saves the outputs.
+A script in `gt_distill` runs the official Openpilot model on the full dataset and saves the outputs.
 
 True ground truth creation is currently not implemented.
 
@@ -140,7 +140,7 @@ conda env create -f environment.yml
 ### Run
 
 1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. You can use comma2k19 or your own collected data, as explained in the [data pipeline](#data-pipeline).
-2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
+2. Run ground truth creation using [gt_distill](gt_distill)
 3. Set up [wandb](https://docs.wandb.ai/quickstart)
 4. Run Training
 * via slurm script

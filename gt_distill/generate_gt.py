@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import extract_preds, printf, dir_path, PATH_TO_CACHE
 from train.dataloader import load_transformed_video
-from gt_hacky.parse_logs import save_segment_calib
+from gt_distill.parse_logs import save_segment_calib
 
 
 def frames_to_tensor(frames):
@@ -34,7 +34,7 @@ def frames_to_tensor(frames):
 def generate_ground_truth(path_to_segment, model, force=False):
     '''Model expected to be an onnxruntime InferenceSession.'''
 
-    out_path = os.path.join(path_to_segment, 'gt_hacky.h5')
+    out_path = os.path.join(path_to_segment, 'gt_distill.h5')
 
     if exists(out_path) and not force:
         print('Ground truth already exists at:', out_path)
