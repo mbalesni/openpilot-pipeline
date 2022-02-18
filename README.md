@@ -230,6 +230,8 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
     <td><img src="doc/MHP_vis.png" ></td>
     <td><img src="doc/distill_viz.png" ></td>
  </table>
+ 
+ The short CARLA gif at the top of the README is the Likelihood model.
 
 ## Feature Roadmap
 
