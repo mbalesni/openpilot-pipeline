@@ -133,12 +133,16 @@ Altogether this results in relatively low latency: ~150ms waiting + ~175ms trans
 git clone https://github.com/nikebless/openpilot-pipeline.git
 ```
 
-3. Install conda from [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
-4. Install the repo's conda environment: <!-- TODO: update environment with imageio and moviepy -->
+3. Install [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html) if you don't have it yet 
+4. Install the repo's conda environment:
 
 ```bash
 cd openpilot-pipeline/
 conda env create -f environment.yml
+```
+5. Ensure the conda environment is always activated:
+```bash
+conda activate optrain
 ```
 
 ### Run
