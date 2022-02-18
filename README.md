@@ -243,6 +243,7 @@ So far, the Likelihood loss worked much better, resulting in faster convergence 
 - [ ] Filter out segments where the car is not moving. A camera-based detection method is already [implemented](gt_hacky/detect_moving_camera.py) (untested)
 - [ ] Fault-tolerant data loader (do not crash training when a single video failed to read)
 - [ ] Speed up data loader via a better synchronization mechanism
+- [ ] Kill & restart (remembering the state) train/validation data loaders to reduce CPU-per-unit-of-batch-size cost
 - [ ] Move to PyTorch Lightning for better maintainability
 
 
