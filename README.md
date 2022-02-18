@@ -19,7 +19,7 @@ In the end, we list [suggested improvements](#suggested-improvements-easy-pr) th
 
 ## Model
 
-We use the original CommaAI's supercombo model from [Openpilot 0.8.10 release]([Openpilot 0.8.10 Release](https://github.com/commaai/openpilot/tree/v0.8.10/models). It consists of three parts:
+We currently fine-tune the original CommaAI's supercombo model from [Openpilot 0.8.11 release](https://github.com/commaai/openpilot/tree/v0.8.11/models). It consists of three parts:
 
 - convolutional feature extractor (based on Resnet), followed by
 - a GRU (used to capture the temporal context)
@@ -41,6 +41,8 @@ We use the original CommaAI's supercombo model from [Openpilot 0.8.10 release]([
 Since Openpilot's repo Git LFS was broken at the time of our development, we kept a [copy](common/models/supercombo.onnx) of the model in our repo for easy access.
 
 Model inputs and outputs are described in detail in the [official repo](https://github.com/commaai/openpilot/tree/master/models). 
+
+> **Note:** ONNX models are only available in the non-release branches, so we had to look for the right ONNX model by comparing the hashes of the corresponding DLC models to the one in desired release.
 
 ### Inputs
 
@@ -185,7 +187,7 @@ python torch_to_onnx.py <model_path>
 ```
 1. In a simulation (Carla)
 
-> **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, you can try updating the `start_openpilot_docker.sh` script with a tag from an older docker container version from the [history](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/versions?filters%5Bversion_type%5D=untagged).
+> **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, try using [Openpilot v0.8.11](https://github.com/commaai/openpilot/releases/tag/v0.8.11) and [this version](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/11945846) of the docker container. To do the latter, you will need to update the `start_openpilot_docker.sh` script with that version's SHA256 hash.
 
 <!-- TODO: add exact versions that worked for us -->
 
