@@ -76,7 +76,7 @@ The latter one works much better, and the code for it was shared with us by folk
 
 ## Data pipeline
 
-A script in `gt_hacky` runs the official Openpilot model on the full dataset and saves the outputs.
+A script in `gt_distill` runs the official Openpilot model on the full dataset and saves the outputs.
 
 True ground truth creation is currently not implemented.
 
@@ -144,7 +144,7 @@ conda env create -f environment.yml
 ### Run
 
 1. Get the dataset in the [comma2k19](https://github.com/commaai/comma2k19) format available in a local folder. You can use comma2k19 or your own collected data, as explained in the [data pipeline](#data-pipeline).
-2. Run ground truth creation using [gt_hacky](gt_hacky) <!-- TODO: merge calibration extraction with gt_hacky -->
+2. Run ground truth creation using [gt_distill](gt_distill)
 3. Set up [wandb](https://docs.wandb.ai/quickstart)
 4. Run Training
 * via slurm script
@@ -188,8 +188,6 @@ python torch_to_onnx.py <model_path>
 1. In a simulation (Carla)
 
 > **Note:** As Openpilot is always under development, the current version of the Carla bridge is sometimes broken. This is not helped by the fact that the bash script always pulls the latest Openpilot docker container. If you run into issues setting up the simulator, try using [Openpilot v0.8.11](https://github.com/commaai/openpilot/releases/tag/v0.8.11) and [this version](https://github.com/commaai/openpilot/pkgs/container/openpilot-sim/11945846) of the docker container. To do the latter, you will need to update the `start_openpilot_docker.sh` script with that version's SHA256 hash.
-
-<!-- TODO: add exact versions that worked for us -->
 
 
 * Make sure that you have installed [openpilot](https://github.com/commaai/openpilot/tree/master/tools). 

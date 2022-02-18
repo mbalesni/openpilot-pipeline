@@ -16,7 +16,7 @@ from dataloader import CommaDataset, BatchDataLoader, BackgroundGenerator, load_
 from torch.utils.data import DataLoader
 import wandb
 from timing import Timing, MultiTiming, pprint_stats
-from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5
+from utils import Calibration, draw_path, printf, extract_preds, extract_gt, load_h5, dir_path
 import os
 from model import load_trainable_model
 import gc
@@ -453,13 +453,6 @@ def validate_batch(model, val_stacked_frames, val_plans, val_plans_probs, recurr
 
     val_batch_loss = val_batch_loss / seq_len / batch_size
     return val_batch_loss.detach(), recurr_input
-
-
-def dir_path(path):
-    if os.path.isdir(path):
-        return path
-    else:
-        raise argparse.ArgumentTypeError(f"readable_dir:{path} is not a valid path")
 
 
 if __name__ == "__main__":
