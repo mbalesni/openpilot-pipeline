@@ -93,7 +93,7 @@ To use your data for training, you currently need to collect it with a [Comma 2 
 
 * **General:** 
   * Recurrent state of the GRU and desire are intialized with zeros. 
-  * Traffic convention is hard-coded for right-hand.
+  * Traffic convention is hard-coded for RHT (Right Hand Traffic, i.e. Left Hand Driving).
   * A batch consists of `batch_size` sequences of length `seq_len` each from a different one-minute driving segment to reduce data correlation.
   
 
