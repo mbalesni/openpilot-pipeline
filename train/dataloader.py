@@ -245,7 +245,7 @@ class CommaDataset(IterableDataset):
                     try:
                         yuv_frame2 = bgr_to_yuv(frame2)
                     except Exception as err:
-                        printf(f'Failed to read frame {sequence_idx*seq_len + t_idx} of segment:', self.hevc_file_paths[segment_idx])
+                        printf(f'Failed to read frame {sequence_idx*self.seq_len + t_idx} of segment:', self.hevc_file_paths[segment_idx])
                         raise err
                     yuv_frame_seq[t_idx] = yuv_frame2
 
